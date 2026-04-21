@@ -4,9 +4,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from langchain.agents import create_agent
+from langchain_core.runnables import Runnable
 from langchain.tools import tool
 from ..llm import get_llm
 from ..config import cfg
+from .shared import read_file
 
 
 @tool
@@ -15,17 +17,8 @@ def web_search(query: str) -> str:
     try:
         from langchain_community.tools import DuckDuckGoSearchRun
         return DuckDuckGoSearchRun().run(query)
-    except Exception as e:
+    except (ImportError, OSError) as e:
         return f"[搜索失败] {e}"
-
-
-@tool
-def read_file(file_path: str) -> str:
-    """读取本地文件内容（local-file 来源时使用）。"""
-    try:
-        return Path(file_path).read_text(encoding="utf-8")
-    except Exception as e:
-        return f"[读取失败] {e}"
 
 
 @tool
@@ -57,7 +50,7 @@ SYSTEM_PROMPT = """你是视频制作团队的调研专家。根据话题收集�
 """
 
 
-def create_researcher_agent():
+def create_researcher_agent() -> Runnable:
     model = get_llm(cfg.SUBAGENT_MODEL, temperature=0.3)
     return create_agent(
         model=model,

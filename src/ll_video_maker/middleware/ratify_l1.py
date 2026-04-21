@@ -65,7 +65,8 @@ def check_script(output_dir: str, duration: str = "1-3min") -> list[str]:
         m = re.search(r"^type:\s*(\w+)", scene_block, re.MULTILINE)
         if not m or m.group(1) not in audio_types:
             continue
-        sid = (re.search(r"^## Scene (\S+)", scene_block, re.MULTILINE) or type("", (), {"group": lambda s, n: "?"})()).group(1)
+        sid_match = re.search(r"^## Scene (\S+)", scene_block, re.MULTILINE)
+        sid = sid_match.group(1) if sid_match else "?"
         for f in ("scene_intent:", "content_brief:", "narration:"):
             if f not in scene_block:
                 errors.append(f"Scene {sid} 缺少 {f}")
@@ -78,7 +79,8 @@ def check_script(output_dir: str, duration: str = "1-3min") -> list[str]:
     for block in re.findall(r"^## Scene.*?(?=^## Scene|\Z)", text, re.MULTILINE | re.DOTALL):
         if "type: data_card" not in block:
             continue
-        sid = (re.search(r"^## Scene (\S+)", block, re.MULTILINE) or type("", (), {"group": lambda s, n: "?"})()).group(1)
+        sid_match = re.search(r"^## Scene (\S+)", block, re.MULTILINE)
+        sid = sid_match.group(1) if sid_match else "?"
         if "data_semantic:" not in block:
             errors.append(f"Scene {sid} (data_card) 缺少 data_semantic")
         if re.search(r"items:\s*\[\]", block) or "items:" not in block:
@@ -92,7 +94,7 @@ CHECKERS = {"research": check_research, "script": check_script}
 
 # ── wrap_tool_call middleware ──────────────────────────────────
 
-def make_ratify_middleware():
+def make_ratify_middleware() -> object:
     """返回 l1_auto_ratify middleware（避免循环导入 wrap_tool_call）。"""
     try:
         from langchain.agents.middleware import wrap_tool_call

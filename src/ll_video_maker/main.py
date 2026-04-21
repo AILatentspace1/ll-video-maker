@@ -14,12 +14,8 @@ import os
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
 
-load_dotenv()
-
-
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="video-maker: research + script pipeline")
     parser.add_argument("--topic", required=True, help="视频话题")
     parser.add_argument("--duration", default="1-3min",

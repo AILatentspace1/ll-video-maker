@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from langchain.agents import create_agent
+from langchain_core.runnables import Runnable
 from langchain.tools import tool
 from ..llm import get_llm
 from ..config import cfg
@@ -14,7 +15,7 @@ def read_research(research_file: str) -> str:
     """读取 research.md 内容。"""
     try:
         return Path(research_file).read_text(encoding="utf-8")
-    except Exception as e:
+    except (FileNotFoundError, OSError) as e:
         return f"[读取失败] {e}"
 
 
@@ -32,7 +33,10 @@ def write_contract(output_dir: str, contract_json: str) -> str:
     """将脚本合约写入 {output_dir}/script-contract.json（GAN eval mode）。"""
     import json
     path = Path(output_dir) / "script-contract.json"
-    json.loads(contract_json)  # 验证合法 JSON
+    try:
+        json.loads(contract_json)
+    except json.JSONDecodeError as e:
+        return f"[JSON 验证失败] {e}"
     path.write_text(contract_json, encoding="utf-8")
     return str(path)
 
@@ -96,7 +100,7 @@ narration: <旁白文本，口语化>
 """
 
 
-def create_scriptwriter_agent():
+def create_scriptwriter_agent() -> Runnable:
     model = get_llm(cfg.SUBAGENT_MODEL, temperature=0.6)
     return create_agent(
         model=model,

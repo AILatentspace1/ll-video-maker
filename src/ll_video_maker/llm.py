@@ -1,9 +1,12 @@
 """LLM 工厂 — 根据 provider 返回对应的 ChatModel。"""
 from __future__ import annotations
+
+from langchain_core.language_models import BaseChatModel
+
 from .config import cfg
 
 
-def get_llm(model_name: str, temperature: float = 0.3):
+def get_llm(model_name: str, temperature: float = 0.3) -> BaseChatModel:
     """根据 LLM_PROVIDER 返回对应 ChatModel。"""
     provider = cfg.LLM_PROVIDER
 

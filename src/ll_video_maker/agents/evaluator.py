@@ -5,20 +5,11 @@ import json
 from pathlib import Path
 
 from langchain.agents import create_agent
+from langchain_core.runnables import Runnable
 from langchain.tools import tool
 from ..llm import get_llm
 from ..config import cfg
-
-
-@tool
-def read_file(file_path: str) -> str:
-    """读取文件内容（artifact 或 contract）。"""
-    if not file_path:
-        return "[无文件 — 合约审查阶段]"
-    try:
-        return Path(file_path).read_text(encoding="utf-8")
-    except Exception as e:
-        return f"[读取失败] {e}"
+from .shared import read_file
 
 
 @tool
@@ -26,7 +17,10 @@ def write_eval_result(output_dir: str, result_json: str, phase: str = "eval") ->
     """写入评估结果 JSON。phase: contract_review | eval。"""
     names = {"contract_review": "contract-review.json", "eval": "script-eval.json"}
     path = Path(output_dir) / names.get(phase, f"{phase}.json")
-    json.loads(result_json)  # 验证
+    try:
+        json.loads(result_json)
+    except json.JSONDecodeError as e:
+        return f"[JSON 验证失败] {e}"
     path.write_text(result_json, encoding="utf-8")
     return str(path)
 
@@ -65,7 +59,7 @@ SYSTEM_PROMPT = """你是独立质量评估官。核心信念：**每个产出�
 """
 
 
-def create_evaluator_agent():
+def create_evaluator_agent() -> Runnable:
     model = get_llm(cfg.SUBAGENT_MODEL, temperature=0.2)
     return create_agent(
         model=model,

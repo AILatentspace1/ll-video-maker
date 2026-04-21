@@ -11,24 +11,25 @@ import datetime
 import json
 import re
 from pathlib import Path
+from typing import Annotated
 
 from langchain.agents import create_agent
 from langchain.tools import InjectedToolCallId, ToolRuntime, tool
 from langchain.messages import ToolMessage
+from langchain_core.runnables import Runnable
 from langgraph.checkpoint.memory import InMemorySaver
-from .llm import get_llm
 from langgraph.types import Command
-from typing import Annotated
 
 from .agents import create_evaluator_agent, create_researcher_agent, create_scriptwriter_agent
 from .config import cfg
+from .llm import get_llm
 from .middleware import make_ratify_middleware
 from .state import VideoProductionState
 
 
 # ── 单一派发工具 ─────────────────────────────────────────────────
 
-def _build_task_tool(subagents: dict):
+def _build_task_tool(subagents: dict[str, Runnable]) -> type:
     @tool
     def task(
         agent_name: str,
@@ -43,7 +44,10 @@ def _build_task_tool(subagents: dict):
                 tool_call_id=tool_call_id,
             )]})
 
-        state = runtime.state if hasattr(runtime, "state") else {}
+        try:
+            state = runtime.state
+        except AttributeError:
+            state = {}
         invoke_input = {"messages": [{"role": "user", "content": description}]}
         for key in ("output_dir", "current_milestone", "ratify_feedback"):
             val = getattr(state, key, None)
@@ -146,7 +150,7 @@ def init_output_dir(topic: str, project_root: str) -> str:
 
 # ── 工厂函数 ─────────────────────────────────────────────────────
 
-def create_producer(project_root: str = "."):
+def create_producer(project_root: str = ".") -> Runnable:
     """创建 Producer agent，返回可调用的 LangGraph Pregel 对象。"""
     subagents = {
         "researcher": create_researcher_agent(),
