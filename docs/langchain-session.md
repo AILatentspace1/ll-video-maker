@@ -6,13 +6,14 @@
 
 ## 目录
 
-1. [LangChain 1.0 架构总览](#1-langchain-10-架构总览2025-年-10-月后)  
-2. [create\_agent 深度解析](#2-create_agent-langchain-10-的唯一高层抽象)  
-3. [多 Agent 迁移实战](#3-把-producer-in-skill-架构翻译成-langchain-10)  
-4. [Ratify 两层审核机制](#4-ratify-机制的两层落地)  
-5. [Judge 鲁棒化](#5-judge-会怎么翻车以及怎么治)  
-6. [LangSmith 整合闭环](#6-把-ratify-系统整合进-langsmith-工作流)  
-7. [附录:关键资产索引](#附录-关键资产索引)
+1. [LangChain 1.0 架构总览](#1-langchain-10-架构总览2025-年-10-月后)
+2. [create_agent 深度解析](#2-create_agent-langchain-10-的唯一高层抽象)
+3. [多 Agent 迁移实战](#3-把-producer-in-skill-架构翻译成-langchain-10)
+4. [Ratify 两层审核机制](#4-ratify-机制的两层落地)
+5. [Judge 鲁棒化](#5-judge-会怎么翻车以及怎么治)
+6. [LangSmith 整合闭环](#6-把-ratify-系统整合进-langsmith-工作流)
+7. [Skill 组件到 LangChain 1.0 的完整映射](#7-skill-组件到-langchain-10-的完整映射)
+8. [附录: 关键资产索引](#附录-关键资产索引)
 
 ---
 
@@ -1123,6 +1124,170 @@ flowchart TD
 **② 复用现有 article-to-video-script 评测集(半天)** fork 成 `ratify_golden_fail` 或 `ratify_edge_cases`。
 
 **③ 搭最简 calibration loop(1-2 天)** 先不搞花哨界面,脚本每周跑一次,20 条样本扔到笔记手动打标。跑三周知道 judge 稳不稳。
+
+---
+
+## 7. Skill 组件到 LangChain 1.0 的完整映射
+
+> 原始 skill 路径: `E:/workspace/orchestrator_skills/.claude/skills/video-maker/`
+
+### Skill 目录结构与对应关系
+
+```mermaid
+graph LR
+    subgraph Skill["Claude Code Skill"]
+        SK["SKILL.md<br>(Producer 角色定义)"]
+        AG["agents/*.md<br>(Crew prompt 模板)"]
+        MI["milestones/*.md<br>(里程碑指令)"]
+        RA["ratify/*.md<br>(L1 规则检查)"]
+        RE["references/*.md<br>(参数/schema)"]
+        TM["templates/<br>(内置模板)"]
+        SC["scripts/<br>(辅助脚本)"]
+    end
+
+    subgraph LC["LangChain 1.0"]
+        PS["system_prompt<br>(Producer prompt)"]
+        SA["subagent system_prompt<br>(Crew prompt)"]
+        ST["state.current_milestone<br>驱动的条件逻辑"]
+        MW["wrap_tool_call<br>(L1 自动审核)"]
+        MW2["HumanInTheLoopMiddleware<br>(L2 人工审核)"]
+        DF["context_schema / dataclass<br>(参数/模板)"]
+        TL["@tool 函数<br>(辅助工具)"]
+    end
+
+    SK --> PS
+    AG --> SA
+    MI --> ST
+    RA --> MW
+    RE --> DF
+    TM --> DF
+    SC --> TL
+```
+
+### Skill 核心组件逐一翻译
+
+| Skill 组件 | 文件 | LangChain 1.0 对应 | 状态 |
+| :---- | :---- | :---- | :---- |
+| **Producer 角色** | `SKILL.md` | `create_agent(system_prompt=..., tools=[task])` | 已实现 |
+| **Researcher** | `agents/researcher.md` | `create_agent(system_prompt=..., name="researcher")` | 已实现 |
+| **Scriptwriter** | `agents/scriptwriter.md` | `create_agent(system_prompt=..., name="scriptwriter")` | 已实现 |
+| **Evaluator** | `agents/evaluator.md` | `create_agent(system_prompt=..., name="evaluator")` | 已实现 |
+| **Editor** | `agents/editor.md` | 待实现 (visual milestone) | 未实现 |
+| **Scene generators** | `agents/scene-batch-*.md` | 待实现 (assets milestone) | 未实现 |
+| **L1 Ratify: research** | `ratify/research-rules.md` | `middleware/ratify_l1.py: check_research()` | 已实现 |
+| **L1 Ratify: script** | `ratify/script-rules.md` | `middleware/ratify_l1.py: check_script()` | 已实现 |
+| **L1 Ratify: assets** | `ratify/assets-rules.md` | 待实现 | 未实现 |
+| **L1 Ratify: assembly** | `ratify/assembly-rules.md` | 待实现 | 未实现 |
+| **L2 Reviewer** | `agents/reviewer.md` | `HumanInTheLoopMiddleware` | 代码已有,待集成 |
+| **GAN Evaluator** | `agents/evaluator.md` + script 里程碑 | `evaluator` subagent + 合约循环 | 已实现 |
+| **Pipeline YAML** | `milestones/_pipeline.yaml` | Producer `system_prompt` 内置里程碑序列 | 已实现 |
+| **State 管理** | `state.yaml` per thread | `AgentState` + `checkpointer` | 已实现 |
+| **参数收集** | SKILL.md §1 (AskUserQuestion) | `ainvoke()` + CLI `--topic/--duration` 参数 | 已实现 |
+| **参数派生** | `references/parameters.md` | `main.py: derive_parameters()` | 已实现 |
+| **Manifest** | `references/manifest-schema.md` | `state["manifest"]` 字段 | 未实现 |
+| **Quality scoring** | `references/quality-scoring.md` | evaluator subagent 加权评分 | 已实现 |
+
+### Skill 中 Agent Prompt 的翻译要点
+
+原始 skill 中每个 `.md` 文件使用 `{variable}` 占位符,由 Producer 渲染后传给 subagent:
+
+```python
+# Claude Code Skill 的做法 (Producer 内联渲染)
+prompt = open("agents/researcher.md").read()
+prompt = prompt.format(duration="1-3min", style="professional", topic="AI Agent")
+Agent("researcher").invoke(prompt)
+
+# LangChain 1.0 的做法 (system_prompt 参数)
+researcher = create_agent(
+    model="deepseek-chat",
+    tools=[web_search, ...],
+    system_prompt=open("agents/researcher.md").read(),
+    # 变量通过 description 参数注入,或用 @dynamic_prompt middleware 动态渲染
+)
+```
+
+**两种方案**:
+
+1. **静态注入** (当前实现): 变量直接拼进 `task()` 的 `description` 参数,subagent 的 `system_prompt` 保留模板变量不渲染
+2. **动态渲染** (更灵活): 用 `@dynamic_prompt` / `before_model` middleware 在运行时读取 `.md` 文件并渲染变量
+
+```python
+# 动态渲染方案
+@wrap_model_call
+def render_agent_prompt(request: ModelRequest, handler) -> ModelResponse:
+    if request.state.get("current_milestone") == "research":
+        template = open("agents/researcher.md").read()
+        rendered = template.format(
+            duration=request.state["goal"]["duration"],
+            style=request.state["goal"]["style"],
+            topic=request.state["goal"]["topic"],
+        )
+        # 注入到 messages 前面
+        request = request.override(messages=[
+            {"role": "system", "content": rendered},
+            *request.state["messages"]
+        ])
+    return handler(request)
+```
+
+### Ratify 规则文件的翻译对照
+
+| Ratify 规则 (Skill `.md`) | 翻译为 Python 检查 (L1 middleware) |
+| :---- | :---- |
+| `script.md 存在` | `os.path.exists(output_dir / "script.md")` |
+| `scene 数量在目标范围内` | `min_scenes <= scene_count <= max_scenes` |
+| `无 3+ 连续同类型 scene` | 连续遍历检查 |
+| `每个 scene 有 scene_intent:` | regex `r"^scene_intent:"` 逐行检查 |
+| `data_card 有 data_semantic:` | regex `r"^data_semantic:"` + `items` 非空 |
+| `禁止 layer_hint:` | `r"^layer_hint:" not in content` |
+| `禁止 beats:` | `r"^beats:" not in content` |
+
+### Milestone 指令的加载模式
+
+Skill 设计中里程碑指令是**按需加载**的 (`执行时才 Read`),对应 LangChain 的两种实现:
+
+```python
+# 方案 A: 全写进 system_prompt (当前,适合 milestone 少的场景)
+system_prompt = """
+你是短视频 Producer。按 milestone 推进:
+1. research → 调用 researcher
+2. script → 调用 scriptwriter
+3. visual + audio → 并行调用 visual_director 和 sound_engineer
+...
+"""
+
+# 方案 B: 里程碑指令动态加载 (适合 milestone 多的场景)
+MILESTONE_INSTRUCTIONS = {
+    "research": open("milestones/research.md").read(),
+    "script": open("milestones/script.md").read(),
+    "assets": open("milestones/assets.md").read(),
+}
+
+@wrap_model_call
+def inject_milestone_instruction(request: ModelRequest, handler) -> ModelResponse:
+    milestone = request.state.get("current_milestone")
+    if milestone in MILESTONE_INSTRUCTIONS:
+        instruction = MILESTONE_INSTRUCTIONS[milestone]
+        messages = [{"role": "system", "content": instruction}, *request.state["messages"]]
+        request = request.override(messages=messages)
+    return handler(request)
+```
+
+### 未迁移的 Skill 组件清单
+
+以下组件尚在 Skill 中使用,未翻译为 LangChain:
+
+| 组件 | 用途 | 优先级 | 说明 |
+| :---- | :---- | :---- | :---- |
+| **Editor** | 视觉风格控制、分镜细化 | P1 | visual milestone 核心 |
+| **Scene Batch Generator** | 批量图片/视频生成 | P1 | assets milestone 核心 |
+| **Scene Patch Generator** | 单场景修补 | P2 | 容错能力 |
+| **TTS/Whisper Pipeline** | 配音生成+字幕对齐 | P2 | 已有 CLI 封装 |
+| **BGM/SFX 选择** | 背景音乐/音效 | P2 | 已有 CLI 封装 |
+| **Remotion 渲染** | 视频合成 | P1 | 已有 Remotion 项目 |
+| **Manifest 管理** | 逐场景元数据 | P3 | 可简化为 state 字段 |
+| **Quality Report** | 评分报告生成 | P3 | evaluator 输出即可 |
+| **L2 Reviewer Agent** | 人工审核 agent | P2 | HumanInTheLoopMiddleware |
 
 ---
 
