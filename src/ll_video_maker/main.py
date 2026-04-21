@@ -1,0 +1,97 @@
+"""主入口 — 命令行调用 video-maker（research + script 两个 milestone）。
+
+使用示例:
+    python -m ll_video_maker.main \
+        --topic "AI Agent 趋势 2026" \
+        --duration "1-3min" \
+        --style professional \
+        --source websearch
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def main():
+    parser = argparse.ArgumentParser(description="video-maker: research + script pipeline")
+    parser.add_argument("--topic", required=True, help="视频话题")
+    parser.add_argument("--duration", default="1-3min",
+                        choices=["1-3min", "3-5min", "5-10min"], help="目标时长")
+    parser.add_argument("--style", default="professional",
+                        choices=["professional", "casual", "storytelling"], help="旁白风格")
+    parser.add_argument("--source", default="websearch",
+                        choices=["websearch", "notebooklm", "local-file", "manual"],
+                        help="素材来源")
+    parser.add_argument("--aspect-ratio", default="16:9",
+                        choices=["16:9", "9:16", "3:4", "1:1"])
+    parser.add_argument("--eval-mode", default="gan", choices=["gan", "legacy"],
+                        help="脚本评估模式: gan=合约+Evaluator, legacy=仅 L1 规则")
+    parser.add_argument("--project-root", default=".", help="输出根目录")
+    parser.add_argument("--thread-id", default=None, help="恢复会话 ID（断点续跑）")
+    parser.add_argument("--notebook-url", default="", help="NotebookLM URL")
+    parser.add_argument("--local-file", default="", help="本地素材文件路径")
+
+    args = parser.parse_args()
+
+    provider = os.getenv("LLM_PROVIDER", "deepseek")
+    key_map = {"deepseek": "DEEPSEEK_API_KEY", "zhipu": "ANTHROPIC_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+    key_name = key_map.get(provider, "ANTHROPIC_API_KEY")
+    if not os.getenv(key_name):
+        sys.exit(f"[ERROR] {key_name} 未设置，请配置 .env 文件")
+
+    from .producer import create_producer, init_output_dir
+
+    output_dir = init_output_dir(args.topic, args.project_root)
+    print(f"[INFO] 输出目录: {output_dir}")
+
+    producer = create_producer(project_root=args.project_root)
+
+    thread_id = args.thread_id or f"video-{Path(output_dir).name}"
+    config = {"configurable": {"thread_id": thread_id}}
+
+    user_message = (
+        f"请制作视频脚本。\n"
+        f"topic: {args.topic}\n"
+        f"source: {args.source}\n"
+        f"duration: {args.duration}\n"
+        f"style: {args.style}\n"
+        f"aspect_ratio: {args.aspect_ratio}\n"
+        f"eval_mode: {args.eval_mode}\n"
+        f"output_dir: {output_dir}\n"
+    )
+    if args.notebook_url:
+        user_message += f"notebook_url: {args.notebook_url}\n"
+    if args.local_file:
+        user_message += f"local_file: {args.local_file}\n"
+
+    print(f"[INFO] 启动 Producer（thread_id={thread_id}）...")
+
+    import asyncio
+    result = asyncio.run(producer.ainvoke(
+        {"messages": [{"role": "user", "content": user_message}],
+         "output_dir": output_dir,
+         "current_milestone": "research"},
+        config=config,
+    ))
+
+    # 检查是否需要人工干预
+    if hasattr(result, "interrupts") and result.interrupts:
+        print("\n[INFO] 流程已暂停，等待人工操作:")
+        for interrupt in result.interrupts:
+            print(f"  {interrupt}")
+        print(f"\n恢复命令: python -m ll_video_maker.main --thread-id {thread_id} [其他参数]")
+        return
+
+    final_msg = result["messages"][-1].content if result.get("messages") else "无输出"
+    print(f"\n{final_msg}")
+
+
+if __name__ == "__main__":
+    main()
