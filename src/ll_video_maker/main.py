@@ -37,7 +37,7 @@ def main() -> None:
     args = parser.parse_args()
 
     provider = os.getenv("LLM_PROVIDER", "deepseek")
-    key_map = {"deepseek": "DEEPSEEK_API_KEY", "zhipu": "ANTHROPIC_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
+    key_map = {"deepseek": "DEEPSEEK_API_KEY", "zhipu": "ANTHROPIC_API_KEY", "zhipu_openai": "ZHIPU_API_KEY", "anthropic": "ANTHROPIC_API_KEY"}
     key_name = key_map.get(provider, "ANTHROPIC_API_KEY")
     if not os.getenv(key_name):
         sys.exit(f"[ERROR] {key_name} 未设置，请配置 .env 文件")
@@ -50,7 +50,7 @@ def main() -> None:
     producer = create_producer(project_root=args.project_root)
 
     thread_id = args.thread_id or f"video-{Path(output_dir).name}"
-    config = {"configurable": {"thread_id": thread_id}}
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
 
     user_message = (
         f"请制作视频脚本。\n"
@@ -70,12 +70,26 @@ def main() -> None:
     print(f"[INFO] 启动 Producer（thread_id={thread_id}）...")
 
     import asyncio
-    result = asyncio.run(producer.ainvoke(
-        {"messages": [{"role": "user", "content": user_message}],
-         "output_dir": output_dir,
-         "current_milestone": "research"},
-        config=config,
-    ))
+
+    async def _run():
+        result = None
+        async for chunk in producer.astream(
+            {"messages": [{"role": "user", "content": user_message}],
+             "output_dir": output_dir,
+             "current_milestone": "research"},
+            config=config,
+        ):
+            # 打印每个 node 的输出摘要
+            if isinstance(chunk, dict):
+                msgs = chunk.get("messages", [])
+                if msgs:
+                    last = msgs[-1]
+                    if hasattr(last, "content") and last.content:
+                        preview = last.content[:200].replace("\n", " ")
+                        print(f"  [{chunk.get('__node__', '?')}] {preview}...")
+        return chunk
+
+    result = asyncio.run(_run())
 
     # 检查是否需要人工干预
     if hasattr(result, "interrupts") and result.interrupts:
@@ -84,9 +98,6 @@ def main() -> None:
             print(f"  {interrupt}")
         print(f"\n恢复命令: python -m ll_video_maker.main --thread-id {thread_id} [其他参数]")
         return
-
-    final_msg = result["messages"][-1].content if result.get("messages") else "无输出"
-    print(f"\n{final_msg}")
 
 
 if __name__ == "__main__":

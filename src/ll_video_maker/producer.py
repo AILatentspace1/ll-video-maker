@@ -54,7 +54,9 @@ def _build_task_tool(subagents: dict[str, Runnable]) -> type:
             if val:
                 invoke_input[key] = val
 
-        result = subagents[agent_name].invoke(invoke_input)
+        result = subagents[agent_name].invoke(
+            invoke_input, {"recursion_limit": 50}
+        )
 
         updates: dict = {"messages": [ToolMessage(
             content=result["messages"][-1].content,

@@ -19,6 +19,15 @@ def get_llm(model_name: str, temperature: float = 0.3) -> BaseChatModel:
             temperature=temperature,
         )
 
+    if provider == "zhipu_openai":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(
+            model=model_name,
+            api_key=cfg.ZHIPU_API_KEY,
+            base_url=cfg.ZHIPU_OPENAI_BASE_URL,
+            temperature=temperature,
+        )
+
     if provider in ("zhipu", "anthropic"):
         from langchain_anthropic import ChatAnthropic
         return ChatAnthropic(
