@@ -15,52 +15,19 @@ from __future__ import annotations
 import json
 import logging
 import os
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _LANGSMITH_AVAILABLE = False
 try:
     from langsmith.run_trees import get_current_run_tree  # type: ignore[import-untyped]
-    from langsmith.run_trees import RunTree  # type: ignore[import-untyped]
     _LANGSMITH_AVAILABLE = True
 except ImportError:
     get_current_run_tree = None  # type: ignore[assignment,misc]
-    RunTree = None  # type: ignore[assignment,misc]
 
 _TRACING_ENABLED = os.getenv("LANGCHAIN_TRACING_V2", "").lower() in ("true", "1", "yes")
-
-
-# ── Trace nesting helper ───────────────────────────────────────────
-
-
-@contextmanager
-def subagent_trace_context() -> Generator[None, None, None]:
-    """Context manager that nests child runs under the current LangGraph trace.
-
-    Wraps ``subagent.invoke()`` so child traces appear as nested children
-    of the parent producer trace in LangSmith UI.
-
-    Per langsmith docs: uses ``get_current_run_tree()`` + ``tracing_context(parent=rt)``.
-    """
-    if not _TRACING_ENABLED or not get_current_run_tree:
-        yield
-        return
-    try:
-        from langsmith import tracing_context as ls_tracing_context  # type: ignore[import-untyped]
-    except ImportError:
-        yield
-        return
-
-    rt = get_current_run_tree()
-    if rt is None:
-        yield
-        return
-
-    with ls_tracing_context(parent=rt):
-        yield
 
 
 # ── Pipeline config builders ────────────────────────────────────────

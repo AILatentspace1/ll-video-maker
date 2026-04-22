@@ -31,7 +31,7 @@ from .middleware import make_ratify_middleware
 from .prompts import render_prompt
 from .state import VideoProductionState
 from .task_context import infer_milestone, infer_phase
-from .tracing import attach_eval_feedback, subagent_trace_context
+from .tracing import attach_eval_feedback
 
 
 # ── Producer 专用工具 ────────────────────────────────────────────
@@ -260,6 +260,7 @@ def _build_task_tool(subagents: dict[str, Runnable]) -> type:
             state = runtime.state
         except AttributeError:
             state = {}
+        parent_config = getattr(runtime, "config", None) or {}
         if agent_name == "scriptwriter":
             description = _augment_scriptwriter_description(description, state)
         invoke_input = {"messages": [{"role": "user", "content": description}]}
@@ -268,11 +269,9 @@ def _build_task_tool(subagents: dict[str, Runnable]) -> type:
             if val:
                 invoke_input[key] = val
 
+        child_config = {**parent_config, "recursion_limit": 50}
         log.info(">>> task(%s) 开始, description: %s", agent_name, description[:120])
-        with subagent_trace_context():
-            result = subagents[agent_name].invoke(
-                invoke_input, {"recursion_limit": 50}
-            )
+        result = subagents[agent_name].invoke(invoke_input, child_config)
         log.info("<<< task(%s) 完成", agent_name)
 
         recovered = _recover_artifact_paths(agent_name, state, result)
