@@ -5,6 +5,8 @@ import json
 import re
 from pathlib import Path
 
+from .script_plan import normalize_contract_topic
+
 
 def _extract_scenes(script_text: str) -> list[dict[str, object]]:
     scenes: list[dict[str, object]] = []
@@ -19,7 +21,7 @@ def _extract_scenes(script_text: str) -> list[dict[str, object]]:
                 "index": int(title_match.group(1)) if title_match else len(scenes) + 1,
                 "title": title_match.group(2).strip() if title_match else "",
                 "type": type_match.group(1).strip() if type_match else "",
-                "contract_topic": contract_topic_match.group(1).strip() if contract_topic_match else "",
+                "contract_topic": normalize_contract_topic(contract_topic_match.group(1)) if contract_topic_match else "",
                 "narrative_role": role_match.group(1).strip() if role_match else "",
                 "duration_estimate": float(duration_match.group(1)) if duration_match else 0.0,
                 "block": block,
@@ -52,7 +54,7 @@ def _topic_keywords(topic: str) -> list[str]:
 
 
 def _find_topic_scene(scenes: list[dict[str, object]], topic: str) -> dict[str, object] | None:
-    normalized_topic = topic.strip().lower()
+    normalized_topic = normalize_contract_topic(topic).lower()
     for scene in scenes:
         tagged = str(scene.get("contract_topic", "")).strip().lower()
         if tagged and tagged == normalized_topic:
@@ -134,7 +136,7 @@ def check_script_contract(output_dir: str) -> list[str]:
 
     key_topics = contract.get("key_topics") or []
     for item in key_topics:
-        topic = str(item.get("topic", "")).strip()
+        topic = normalize_contract_topic(item.get("topic", ""))
         expected_role = str(item.get("narrative_role", "")).strip()
         if not topic:
             continue

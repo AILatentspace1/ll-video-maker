@@ -1,6 +1,7 @@
-"""L1 Ratify：对 research / script 输出做基础静态校验。"""
+﻿"""L1 Ratify：对 research / script 及评估产物做基础静态校验。"""
 from __future__ import annotations
 
+import json
 import logging
 import re
 from pathlib import Path
@@ -11,6 +12,21 @@ from ..validators import check_script_contract, check_script_plan, check_script_
 
 logger = logging.getLogger(__name__)
 MAX_RETRY = 2
+
+
+def _infer_validation_target(agent_name: str, description: str, state: object) -> str:
+    if agent_name == "researcher":
+        return "research"
+    if agent_name == "scriptwriter":
+        return "script"
+    if agent_name == "evaluator":
+        normalized = str(description or "").lower()
+        if "contract_review" in normalized:
+            return "contract_review"
+        if re.search(r"\beval\b", normalized):
+            return "script_eval"
+    milestone = getattr(state, "current_milestone", "research")
+    return milestone if isinstance(milestone, str) and milestone else "research"
 
 
 def check_research(output_dir: str) -> list[str]:
@@ -84,7 +100,31 @@ def check_script(output_dir: str, duration: str = "1-3min") -> list[str]:
     return errors
 
 
-CHECKERS = {"research": check_research, "script": check_script}
+def _check_json_file(output_dir: str, file_name: str) -> list[str]:
+    path = Path(output_dir) / file_name
+    if not path.exists():
+        return [f"{file_name} 不存在"]
+    try:
+        json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [f"{file_name} 无法解析"]
+    return []
+
+
+def check_contract_review(output_dir: str) -> list[str]:
+    return _check_json_file(output_dir, "contract-review.json")
+
+
+def check_script_eval(output_dir: str) -> list[str]:
+    return _check_json_file(output_dir, "script-eval.json")
+
+
+CHECKERS = {
+    "research": check_research,
+    "script": check_script,
+    "contract_review": check_contract_review,
+    "script_eval": check_script_eval,
+}
 
 
 def make_ratify_middleware() -> object:
@@ -98,10 +138,11 @@ def make_ratify_middleware() -> object:
                 return await handler(request)
 
             state = getattr(request, "state", {})
-            milestone = getattr(state, "current_milestone", "research")
             output_dir = getattr(state, "output_dir", "")
             ratify_level = getattr(state, "ratify_level", "normal")
+            agent_name = request.tool_call["args"].get("agent_name", "")
             task_desc_orig = request.tool_call["args"].get("description", "")
+            validation_target = _infer_validation_target(agent_name, task_desc_orig, state)
 
             if ratify_level == "fast":
                 return await handler(request)
@@ -115,7 +156,7 @@ def make_ratify_middleware() -> object:
 
                 result = await handler(request)
 
-                checker = CHECKERS.get(milestone)
+                checker = CHECKERS.get(validation_target)
                 errors: list[str] = []
                 if checker and output_dir:
                     try:
@@ -124,16 +165,16 @@ def make_ratify_middleware() -> object:
                         logger.warning("ratify checker error: %s", exc)
 
                 if not errors:
-                    logger.info("[L1 PASS] milestone=%s attempt=%d", milestone, attempt)
+                    logger.info("[L1 PASS] milestone=%s attempt=%d", validation_target, attempt)
                     return result
 
                 last_feedback = "\n".join(f"- {error}" for error in errors)
-                logger.info("[L1 FAIL] milestone=%s attempt=%d errors=%s", milestone, attempt, errors)
+                logger.info("[L1 FAIL] milestone=%s attempt=%d errors=%s", validation_target, attempt, errors)
 
             return ToolMessage(
                 content=(
                     f"[L1 审核未通过 - 已重试 {MAX_RETRY} 次]\n"
-                    f"里程碑: {milestone}\n最后反馈:\n{last_feedback}"
+                    f"里程碑: {validation_target}\n最后反馈:\n{last_feedback}"
                 ),
                 tool_call_id=request.tool_call["id"],
             )

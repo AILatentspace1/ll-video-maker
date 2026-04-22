@@ -40,9 +40,22 @@ narrative_role: cta
 duration_estimate: 2
 """
     (out / "script.md").write_text(script, encoding="utf-8")
+    (out / "contract-review.json").write_text('{"pass": true}', encoding="utf-8")
+    (out / "script-eval.json").write_text('{"pass": true}', encoding="utf-8")
 
     result = validate_script_artifacts(str(out))
+    assert result["artifacts"] == []
     assert result["plan"] == []
     assert result["contract"] == []
     assert result["consistency"] == []
     assert result["all"] == []
+
+
+def test_validate_script_artifacts_fails_when_artifacts_missing(tmp_path):
+    result = validate_script_artifacts(str(tmp_path))
+    assert "缺少产物: script-contract.json" in result["artifacts"]
+    assert "缺少产物: script-plan.json" in result["artifacts"]
+    assert "缺少产物: script.md" in result["artifacts"]
+    assert "缺少产物: contract-review.json" in result["artifacts"]
+    assert "缺少产物: script-eval.json" in result["artifacts"]
+    assert result["all"]

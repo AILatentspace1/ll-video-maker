@@ -106,8 +106,13 @@ def _extract_eval_state_updates(agent_name: str, description: str, content: str,
     if agent_name != "evaluator" or not payload:
         return updates
 
-    phase_match = re.search(r"phase:\s*([a-zA-Z_]+)", description)
-    phase = phase_match.group(1).strip() if phase_match else ""
+    normalized = str(description or "").lower()
+    if "contract_review" in normalized:
+        phase = "contract_review"
+    elif re.search(r"\beval\b", normalized):
+        phase = "eval"
+    else:
+        phase = ""
 
     if phase == "contract_review":
         updates["last_contract_review"] = payload
@@ -127,6 +132,25 @@ def _extract_eval_state_updates(agent_name: str, description: str, content: str,
         updates["must_fix_summary"] = _format_iteration_fixes(updates["iteration_fixes"])
 
     return updates
+
+
+def _infer_milestone_update(agent_name: str, description: str, state: object) -> str | None:
+    if agent_name == "researcher":
+        return "research"
+    if agent_name == "scriptwriter":
+        return "script"
+    if agent_name == "evaluator":
+        normalized = str(description or "").lower()
+        if "contract_review" in normalized:
+            phase = "contract_review"
+        elif re.search(r"\beval\b", normalized):
+            phase = "eval"
+        else:
+            phase = ""
+        if phase in {"contract_review", "eval"}:
+            return "script"
+    current = getattr(state, "current_milestone", None)
+    return current if isinstance(current, str) and current else None
 
 
 def _augment_scriptwriter_description(description: str, state: object) -> str:
@@ -181,6 +205,8 @@ def _build_task_tool(subagents: dict[str, Runnable]) -> type:
             content=result["messages"][-1].content,
             tool_call_id=tool_call_id,
         )]}
+        if milestone := _infer_milestone_update(agent_name, description, state):
+            updates["current_milestone"] = milestone
         updates.update(_extract_eval_state_updates(agent_name, description, result["messages"][-1].content, state))
         # ??????
         for key in ("research_file", "script_plan_file", "script_file", "contract_file", "contract_review_file", "script_eval_file"):
