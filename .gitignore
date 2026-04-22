@@ -12,4 +12,8 @@ output/
 .gstack/
 *.log
 .langchain/
-.claude/settings.local.json
+.claude/
+.vscode/
+# temporary local validation artifacts
+.tmp*/
+*.tmp

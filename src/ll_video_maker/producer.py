@@ -9,9 +9,13 @@ from __future__ import annotations
 
 import datetime
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Annotated
+
+logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
+log = logging.getLogger("producer")
 
 from langchain.agents import create_agent
 from langchain.tools import InjectedToolCallId, ToolRuntime, tool
@@ -27,7 +31,113 @@ from .middleware import make_ratify_middleware
 from .state import VideoProductionState
 
 
+# ── Producer 专用工具 ────────────────────────────────────────────
+
+@tool
+def write_output_file(file_path: str, content: str) -> str:
+    """写入文件到输出目录（Producer 用）。返回写入路径。"""
+    path = Path(file_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return str(path)
+
+
 # ── 单一派发工具 ─────────────────────────────────────────────────
+
+def _recover_artifact_paths(
+    agent_name: str,
+    state: object,
+    result: dict,
+) -> dict[str, str]:
+    """当 subagent 未显式回传路径时，从输出目录兜底恢复已落盘产物。"""
+    recovered: dict[str, str] = {}
+    output_dir = getattr(state, "output_dir", "") if state else ""
+    if not output_dir:
+        return recovered
+
+    output_path = Path(output_dir)
+    fallback_map = {
+        "researcher": {"research_file": output_path / "research.md"},
+        "scriptwriter": {
+            "script_plan_file": output_path / "script-plan.json",
+            "script_file": output_path / "script.md",
+            "contract_file": output_path / "script-contract.json",
+        },
+        "evaluator": {
+            "contract_review_file": output_path / "contract-review.json",
+            "script_eval_file": output_path / "script-eval.json",
+        },
+    }
+    for key, path in fallback_map.get(agent_name, {}).items():
+        if result.get(key):
+            continue
+        if path.exists():
+            recovered[key] = str(path)
+    return recovered
+
+def _format_iteration_fixes(iteration_fixes: list[dict]) -> str:
+    if not iteration_fixes:
+        return ""
+    lines = ["## ??????????"]
+    for idx, item in enumerate(iteration_fixes, start=1):
+        priority = item.get("priority", idx)
+        target = item.get("target", "unknown")
+        action = item.get("action", "")
+        impact = item.get("expected_impact", "")
+        lines.append(f"{idx}. priority={priority}; target={target}")
+        if action:
+            lines.append(f"   action: {action}")
+        if impact:
+            lines.append(f"   expected_impact: {impact}")
+    lines.append("?????????????????????????")
+    return "\n".join(lines)
+
+
+def _parse_json_message(content: str) -> dict | None:
+    try:
+        return json.loads(content)
+    except Exception:
+        return None
+
+
+def _extract_eval_state_updates(agent_name: str, description: str, content: str, state: object) -> dict:
+    updates: dict = {}
+    payload = _parse_json_message(content)
+    if agent_name != "evaluator" or not payload:
+        return updates
+
+    phase_match = re.search(r"phase:\s*([a-zA-Z_]+)", description)
+    phase = phase_match.group(1).strip() if phase_match else ""
+
+    if phase == "contract_review":
+        updates["last_contract_review"] = payload
+        return updates
+
+    if phase == "eval":
+        updates["last_eval_result"] = payload
+        updates["iteration_fixes"] = payload.get("iteration_fixes", []) or []
+        updates["contract_violations"] = payload.get("contract_violations", []) or []
+        weighted_total = payload.get("weighted_total")
+        if isinstance(weighted_total, (int, float)):
+            updates["eval_best_score"] = max(
+                float(weighted_total),
+                float(getattr(state, "eval_best_score", 0.0) or 0.0),
+            )
+        updates["eval_round"] = int(getattr(state, "eval_round", 0) or 0) + 1
+        updates["must_fix_summary"] = _format_iteration_fixes(updates["iteration_fixes"])
+
+    return updates
+
+
+def _augment_scriptwriter_description(description: str, state: object) -> str:
+    fixes = getattr(state, "iteration_fixes", None) or []
+    if not fixes:
+        return description
+    summary = getattr(state, "must_fix_summary", "") or _format_iteration_fixes(fixes)
+    if summary and summary not in description:
+        return description.rstrip() + "\n\n" + summary
+    return description
+
 
 def _build_task_tool(subagents: dict[str, Runnable]) -> type:
     @tool
@@ -48,22 +158,32 @@ def _build_task_tool(subagents: dict[str, Runnable]) -> type:
             state = runtime.state
         except AttributeError:
             state = {}
+        if agent_name == "scriptwriter":
+            description = _augment_scriptwriter_description(description, state)
         invoke_input = {"messages": [{"role": "user", "content": description}]}
-        for key in ("output_dir", "current_milestone", "ratify_feedback"):
+        for key in ("output_dir", "current_milestone", "ratify_feedback", "iteration_fixes", "must_fix_summary", "contract_file", "research_file", "script_plan_file"):
             val = getattr(state, key, None)
             if val:
                 invoke_input[key] = val
 
+        log.info(">>> task(%s) 开始, description: %s", agent_name, description[:120])
         result = subagents[agent_name].invoke(
             invoke_input, {"recursion_limit": 50}
         )
+        log.info("<<< task(%s) 完成", agent_name)
+
+        recovered = _recover_artifact_paths(agent_name, state, result)
+        if recovered:
+            log.info("~~~ task(%s) recovered artifacts: %s", agent_name, recovered)
+            result = {**result, **recovered}
 
         updates: dict = {"messages": [ToolMessage(
             content=result["messages"][-1].content,
             tool_call_id=tool_call_id,
         )]}
-        # 回传产出路径
-        for key in ("research_file", "script_file", "contract_file"):
+        updates.update(_extract_eval_state_updates(agent_name, description, result["messages"][-1].content, state))
+        # ??????
+        for key in ("research_file", "script_plan_file", "script_file", "contract_file", "contract_review_file", "script_eval_file"):
             if val := result.get(key):
                 updates[key] = val
 
@@ -78,6 +198,7 @@ PRODUCER_PROMPT = """你是 video-maker 的 Producer（制片人），负责推�
 
 ## 工具
 - task(agent_name, description): 派发给 researcher / scriptwriter / evaluator
+- write_output_file(file_path, content): 写入文件到磁盘（用于保存合约等）
 
 ## 里程碑 1: research
 1. 派发 researcher，description 包含:
@@ -110,7 +231,14 @@ PRODUCER_PROMPT = """你是 video-maker 的 Producer（制片人），负责推�
 
 ### Phase 2 — 合约审查
 派发 evaluator，description:
-  "合约审查。contract_file: {output_dir}/script-contract.json, phase: contract_review"
+  "脚本合约审查（pre-generation）。
+   phase: contract_review
+   contract_file: {output_dir}/script-contract.json
+   artifact_file:
+   research_file:
+   只审查 script-contract.json 本身是否合法、完整、可执行。
+   不要检查 script.md 是否存在，不要检查实际场景数量或实际内容覆盖。
+   输出 contract-review.json。"
 若 overall=rejected: 按 suggestion 修改合约，最多 2 轮，仍 rejected 则继续并记 warning。
 
 ### Phase 3 — 生成脚本
@@ -123,8 +251,13 @@ PRODUCER_PROMPT = """你是 video-maker 的 Producer（制片人），负责推�
 
 ### Phase 4 — 脚本评估（最多 2 轮迭代）
 派发 evaluator，description:
-  "脚本评估。artifact_file: {output_dir}/script.md, contract_file: {output_dir}/script-contract.json,
-   research_file: {research_file}, phase: eval"
+  "脚本产出评估（post-generation）。
+   phase: eval
+   artifact_file: {output_dir}/script.md
+   contract_file: {output_dir}/script-contract.json
+   research_file: {research_file}
+   请评估 script.md 是否满足 contract 与 research。
+   输出 script-eval.json。"
 
 若 pass=true 则完成。
 若 pass=false: 提取 iteration_fixes → 注入到下一轮 scriptwriter 的 description → 重新 Phase 3+4。
@@ -167,7 +300,7 @@ def create_producer(project_root: str = ".") -> Runnable:
 
     return create_agent(
         model=model,
-        tools=[task_tool],
+        tools=[task_tool, write_output_file],
         system_prompt=PRODUCER_PROMPT,
         middleware=[ratify_mw],
         state_schema=VideoProductionState,
