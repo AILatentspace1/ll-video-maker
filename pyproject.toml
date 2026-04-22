@@ -35,4 +35,6 @@ target-version = "py311"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-v --tb=short"
+addopts = "-v --tb=short -p no:cacheprovider"
+tmp_path_retention_policy = "none"
+basetemp = "output/.pytest-tmpdir"
