@@ -1,4 +1,4 @@
-"""Script vs JSON plan consistency validator."""
+﻿"""Script vs JSON plan consistency validator."""
 from __future__ import annotations
 
 import json
@@ -16,13 +16,15 @@ def _extract_script_scenes(text: str) -> list[dict[str, object]]:
         topic_match = re.search(r'^contract_topic:\s*"?(.+?)"?\s*$', block, re.MULTILINE)
         role_match = re.search(r"^narrative_role:\s*(\w+)", block, re.MULTILINE)
         duration_match = re.search(r"^duration_estimate:\s*([0-9]+(?:\.[0-9]+)?)", block, re.MULTILINE)
-        scenes.append({
-            "index": int(idx_match.group(1)) if idx_match else len(scenes) + 1,
-            "type": type_match.group(1).strip() if type_match else "",
-            "contract_topic": normalize_contract_topic(topic_match.group(1)) if topic_match else "",
-            "narrative_role": role_match.group(1).strip() if role_match else "",
-            "duration_estimate": float(duration_match.group(1)) if duration_match else 0.0,
-        })
+        scenes.append(
+            {
+                "index": int(idx_match.group(1)) if idx_match else len(scenes) + 1,
+                "type": type_match.group(1).strip() if type_match else "",
+                "contract_topic": normalize_contract_topic(topic_match.group(1)) if topic_match else "",
+                "narrative_role": role_match.group(1).strip() if role_match else "",
+                "duration_estimate": float(duration_match.group(1)) if duration_match else 0.0,
+            }
+        )
     return scenes
 
 

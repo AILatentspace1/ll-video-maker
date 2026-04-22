@@ -14,31 +14,31 @@ from ..prompts import load_prompt
 
 @tool
 def read_research(research_file: str) -> str:
-    """?? research.md ???"""
+    """Read research.md text."""
     try:
         return Path(research_file).read_text(encoding="utf-8")
     except (FileNotFoundError, OSError) as exc:
-        return f"[????] {exc}"
+        return f"[read_research error] {exc}"
 
 
 @tool
 def read_file(file_path: str) -> str:
-    """?????????"""
+    """Read a UTF-8 text file."""
     try:
         return Path(file_path).read_text(encoding="utf-8")
     except (FileNotFoundError, OSError) as exc:
-        return f"[????] {exc}"
+        return f"[read_file error] {exc}"
 
 
 @tool
 def summarize_script_plan(file_path: str) -> str:
-    """????? script-plan.json???????????"""
+    """Summarize script-plan.json into a shorter text form."""
     import json
 
     try:
         data = json.loads(Path(file_path).read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
-        return f"[plan ????] {exc}"
+        return f"[plan summary error] {exc}"
 
     scenes = data.get("scenes") or []
     lines = [
@@ -63,7 +63,7 @@ def summarize_script_plan(file_path: str) -> str:
 
 @tool
 def write_script_plan(output_dir: str, content: str) -> str:
-    """??????? {output_dir}/script-plan.json?"""
+    """Write {output_dir}/script-plan.json."""
     path = Path(output_dir) / "script-plan.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -72,7 +72,7 @@ def write_script_plan(output_dir: str, content: str) -> str:
 
 @tool
 def write_script(output_dir: str, content: str) -> str:
-    """????? {output_dir}/script.md?"""
+    """Write {output_dir}/script.md."""
     path = Path(output_dir) / "script.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
@@ -81,14 +81,14 @@ def write_script(output_dir: str, content: str) -> str:
 
 @tool
 def write_contract(output_dir: str, contract_json: str) -> str:
-    """??????? {output_dir}/script-contract.json?"""
+    """Write {output_dir}/script-contract.json after JSON validation."""
     import json
 
     path = Path(output_dir) / "script-contract.json"
     try:
         json.loads(contract_json)
     except json.JSONDecodeError as exc:
-        return f"[JSON ????] {exc}"
+        return f"[JSON validation error] {exc}"
     path.write_text(contract_json, encoding="utf-8")
     return str(path)
 
