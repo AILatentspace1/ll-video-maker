@@ -27,7 +27,7 @@ def validate_script_artifacts(output_dir: str) -> dict[str, list[str]]:
         "plan": plan_errors,
         "contract": contract_errors,
         "consistency": consistency_errors,
-        "all": [*artifact_errors, *plan_errors, *contract_errors, *consistency_errors],
+        "all_errors": [*artifact_errors, *plan_errors, *contract_errors, *consistency_errors],
     }
 
 

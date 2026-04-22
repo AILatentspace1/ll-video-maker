@@ -9,7 +9,7 @@ from langchain_core.runnables import Runnable
 from langchain.tools import tool
 from ..llm import get_llm
 from ..config import cfg
-from ..prompts import load_prompt
+from ..prompts import render_prompt
 from .shared import read_file
 
 
@@ -35,7 +35,7 @@ def write_eval_result(output_dir: str, result_json: str, phase: str = "eval") ->
     return str(path)
 
 
-SYSTEM_PROMPT = load_prompt("evaluator")
+SYSTEM_PROMPT = render_prompt("evaluator")
 
 
 def create_evaluator_agent() -> Runnable:

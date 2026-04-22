@@ -28,7 +28,7 @@ def main() -> None:
 
         result = validate_script_artifacts(args.validate_output_dir)
         print(f"[INFO] validate_output_dir: {args.validate_output_dir}")
-        if result["all"]:
+        if result["all_errors"]:
             print("[FAIL] script artifact validation failed")
             for section in ("plan", "contract", "consistency"):
                 for item in result[section]:

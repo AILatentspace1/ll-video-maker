@@ -48,7 +48,7 @@ duration_estimate: 2
     assert result["plan"] == []
     assert result["contract"] == []
     assert result["consistency"] == []
-    assert result["all"] == []
+    assert result["all_errors"] == []
 
 
 def test_validate_script_artifacts_fails_when_artifacts_missing(tmp_path):
@@ -58,4 +58,4 @@ def test_validate_script_artifacts_fails_when_artifacts_missing(tmp_path):
     assert "缺少产物: script.md" in result["artifacts"]
     assert "缺少产物: contract-review.json" in result["artifacts"]
     assert "缺少产物: script-eval.json" in result["artifacts"]
-    assert result["all"]
+    assert result["all_errors"]

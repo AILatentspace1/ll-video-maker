@@ -8,7 +8,7 @@ from langchain_core.runnables import Runnable
 from langchain.tools import tool
 from ..llm import get_llm
 from ..config import cfg
-from ..prompts import load_prompt
+from ..prompts import render_prompt
 from .shared import read_file
 
 
@@ -31,7 +31,7 @@ def write_research(output_dir: str, content: str) -> str:
     return str(path)
 
 
-SYSTEM_PROMPT = load_prompt("researcher")
+SYSTEM_PROMPT = render_prompt("researcher")
 
 
 def create_researcher_agent() -> Runnable:

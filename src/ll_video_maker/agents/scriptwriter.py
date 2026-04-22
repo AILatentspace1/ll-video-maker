@@ -9,7 +9,7 @@ from langchain.tools import tool
 
 from ..config import cfg
 from ..llm import get_llm
-from ..prompts import load_prompt
+from ..prompts import render_prompt
 
 
 @tool
@@ -93,7 +93,7 @@ def write_contract(output_dir: str, contract_json: str) -> str:
     return str(path)
 
 
-SYSTEM_PROMPT = load_prompt("scriptwriter")
+SYSTEM_PROMPT = render_prompt("scriptwriter")
 
 
 def create_scriptwriter_agent() -> Runnable:
