@@ -12,7 +12,7 @@ load_dotenv()
 @dataclass
 class Config:
     LLM_PROVIDER: str = "deepseek"
-    PRODUCER_MODEL: str = "deepseek-chat"
+    PRODUCER_MODEL: str = "deepseek-reasoner"
     SUBAGENT_MODEL: str = "deepseek-chat"
     JUDGE_MODEL: str = "deepseek-chat"
     DEEPSEEK_API_KEY: str = ""

@@ -18,7 +18,7 @@ def web_search(query: str) -> str:
     try:
         from langchain_community.tools import DuckDuckGoSearchRun
         return DuckDuckGoSearchRun().run(query)
-    except (ImportError, OSError) as e:
+    except Exception as e:
         return f"[搜索失败] {e}"
 
 
