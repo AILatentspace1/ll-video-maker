@@ -2,61 +2,66 @@
 
 Every function gracefully degrades when LANGCHAIN_TRACING_V2 is unset
 or the langsmith package is missing.
+
+Key design: LangGraph (LANGCHAIN_TRACING_V2=true) creates the root trace
+automatically.  We do NOT wrap ``producer.ainvoke()`` with ``tracing_context``
+—that would create a competing, disconnected trace.  Instead we pass
+``metadata`` and ``tags`` via LangGraph config so they attach to the
+automatic trace.  Feedback functions use ``get_current_run_tree()``
+inside the LangGraph execution context.
 """
 from __future__ import annotations
 
 import json
 import logging
 import os
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Generator
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 _LANGSMITH_AVAILABLE = False
 try:
-    from langsmith import tracing_context  # type: ignore[import-untyped]
     from langsmith.run_trees import get_current_run_tree  # type: ignore[import-untyped]
     _LANGSMITH_AVAILABLE = True
 except ImportError:
-    tracing_context = None  # type: ignore[assignment,misc]
     get_current_run_tree = None  # type: ignore[assignment,misc]
 
 _TRACING_ENABLED = os.getenv("LANGCHAIN_TRACING_V2", "").lower() in ("true", "1", "yes")
 
 
-# ── Pipeline-level tracing ─────────────────────────────────────────
+# ── Pipeline config builders ────────────────────────────────────────
 
 
-@contextmanager
-def pipeline_tracing_context(
+def build_run_config(
     *,
+    thread_id: str,
     run_id: str,
     topic: str,
     duration: str,
     style: str,
     eval_mode: str,
-) -> Generator[None, None, None]:
-    """Wrap ``producer.ainvoke()`` with pipeline-level tags and metadata."""
-    if not _TRACING_ENABLED or not tracing_context:
-        yield
-        return
+) -> dict:
+    """Build a LangGraph RunnableConfig with tracing metadata/tags.
 
-    with tracing_context(
-        tags=[
+    Pass the returned dict directly to ``producer.ainvoke(..., config=config)``.
+    LangGraph will attach metadata and tags to its automatic root trace.
+    """
+    return {
+        "configurable": {"thread_id": thread_id},
+        "recursion_limit": 50,
+        "run_id": run_id,
+        "tags": [
             "pipeline:video-maker",
             f"eval_mode:{eval_mode}",
         ],
-        metadata={
-            "run_id": run_id,
+        "metadata": {
             "topic": topic,
             "duration": duration,
             "style": style,
             "eval_mode": eval_mode,
         },
-    ):
-        yield
+    }
 
 
 # ── L1 ratify feedback ────────────────────────────────────────────
@@ -72,6 +77,8 @@ def attach_ratify_feedback(
     """Record an L1 ratify check result as LangSmith feedback.
 
     Call after every ``checker(output_dir)`` invocation inside the middleware.
+    Runs inside LangGraph context, so ``get_current_run_tree()`` returns
+    the correct run.
     """
     if not _TRACING_ENABLED or not get_current_run_tree:
         return
@@ -144,8 +151,9 @@ def attach_eval_feedback(eval_result: dict[str, Any]) -> None:
 def attach_production_feedback(run_id: str, output_dir: str) -> None:
     """Post-run: read script-eval.json and upload all dimension scores.
 
-    Designed to be called from ``main.py`` after ``producer.ainvoke()``
-    returns.  Silently skips when the file doesn't exist (e.g. legacy mode).
+    Called from ``main.py`` after ``producer.ainvoke()`` returns.
+    Uses the explicit ``run_id`` (from config) because we're outside
+    the LangGraph execution context at this point.
     """
     if not _TRACING_ENABLED or not run_id:
         return

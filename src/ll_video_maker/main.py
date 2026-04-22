@@ -1,7 +1,8 @@
-﻿"""命令行入口。"""
+"""命令行入口。"""
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -53,6 +54,7 @@ def main() -> None:
         sys.exit(f"[ERROR] {key_name} 未设置，请配置 .env 文件")
 
     from .producer import create_producer, init_output_dir
+    from .tracing import attach_production_feedback, build_run_config
 
     output_dir = init_output_dir(args.topic, args.project_root)
     print(f"[INFO] 输出目录: {output_dir}")
@@ -60,7 +62,15 @@ def main() -> None:
     producer = create_producer(project_root=args.project_root)
     thread_id = args.thread_id or f"video-{Path(output_dir).name}"
     run_id = uuid4().hex[:12]
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50, "run_id": run_id}
+
+    config = build_run_config(
+        thread_id=thread_id,
+        run_id=run_id,
+        topic=args.topic,
+        duration=args.duration,
+        style=args.style,
+        eval_mode=args.eval_mode,
+    )
 
     user_message = (
         f"请制作视频脚本。\n"
@@ -79,26 +89,15 @@ def main() -> None:
 
     print(f"[INFO] 启动 Producer（thread_id={thread_id}, run_id={run_id}）...")
 
-    from .tracing import attach_production_feedback, pipeline_tracing_context
-
-    import asyncio
-
     async def _run():
-        with pipeline_tracing_context(
-            run_id=run_id,
-            topic=args.topic,
-            duration=args.duration,
-            style=args.style,
-            eval_mode=args.eval_mode,
-        ):
-            return await producer.ainvoke(
-                {
-                    "messages": [{"role": "user", "content": user_message}],
-                    "output_dir": output_dir,
-                    "current_milestone": "research",
-                },
-                config=config,
-            )
+        return await producer.ainvoke(
+            {
+                "messages": [{"role": "user", "content": user_message}],
+                "output_dir": output_dir,
+                "current_milestone": "research",
+            },
+            config=config,
+        )
 
     result = asyncio.run(_run())
 
