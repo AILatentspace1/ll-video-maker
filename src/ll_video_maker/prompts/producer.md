@@ -77,6 +77,7 @@
 
 ```text
 脚本合同审查（pre-generation）。
+milestone: script
 phase: contract_review
 contract_file: {output_dir}/script-contract.json
 artifact_file:
@@ -114,6 +115,7 @@ research_file:
 
 ```text
 脚本产出评估（post-generation）。
+milestone: script
 phase: eval
 artifact_file: {output_dir}/script.md
 contract_file: {output_dir}/script-contract.json

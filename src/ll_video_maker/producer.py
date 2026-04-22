@@ -30,7 +30,8 @@ from .llm import get_llm
 from .middleware import make_ratify_middleware
 from .prompts import render_prompt
 from .state import VideoProductionState
-from .tracing import attach_eval_feedback
+from .task_context import infer_milestone, infer_phase
+from .tracing import attach_eval_feedback, subagent_trace_context
 
 
 # ── Producer 专用工具 ────────────────────────────────────────────
@@ -79,27 +80,28 @@ def _recover_artifact_paths(
 
 def _summarize_tool_result(agent_name: str, description: str, result: dict, state: object) -> str:
     raw = result["messages"][-1].content
-    normalized = str(description or "").lower()
     output_dir = getattr(state, "output_dir", "") or ""
 
     if agent_name == "evaluator":
         payload = _parse_json_message(raw)
         if not payload:
             return raw[:300]
-        phase = "contract_review" if "contract_review" in normalized else "eval" if "eval" in normalized else ""
+        milestone = infer_milestone(description, state, fallback="script")
+        phase = infer_phase(description)
         if phase == "eval":
             passed = payload.get("pass", False)
             score = payload.get("weighted_total", "?")
             fixes_count = len(payload.get("iteration_fixes", []))
             violations = [v for v in payload.get("contract_violations", []) if v.get("severity") == "major"]
             status = "PASS" if passed else "FAIL"
-            line = f"eval: {status} | score={score} | fixes={fixes_count}"
+            line = f"{milestone}.eval: {status} | score={score} | fixes={fixes_count}"
             if violations:
                 line += f" | major_violations={len(violations)}"
             return line
         if phase == "contract_review":
-            overall = payload.get("overall", "unknown")
-            return f"contract_review: overall={overall}"
+            passed = payload.get("pass")
+            status = "PASS" if passed is True else "FAIL" if passed is False else "UNKNOWN"
+            return f"{milestone}.contract_review: {status}"
         return raw[:300]
 
     if agent_name == "researcher":
@@ -148,13 +150,10 @@ def _extract_eval_state_updates(agent_name: str, description: str, content: str,
     if agent_name != "evaluator" or not payload:
         return updates
 
-    normalized = str(description or "").lower()
-    if "contract_review" in normalized:
-        phase = "contract_review"
-    elif re.search(r"\beval\b", normalized):
-        phase = "eval"
-    else:
-        phase = ""
+    milestone = infer_milestone(description, state, fallback="script")
+    phase = infer_phase(description)
+    if milestone != "script":
+        return updates
 
     if phase == "contract_review":
         updates["last_contract_review"] = payload
@@ -176,23 +175,60 @@ def _extract_eval_state_updates(agent_name: str, description: str, content: str,
 
     return updates
 
-def _infer_milestone_update(agent_name: str, description: str, state: object) -> str | None:
+
+def _set_milestone_status(updates: dict[str, str], milestone: str, status: str) -> None:
+    key = f"milestone_{milestone}"
+    updates[key] = status
+
+
+def _derive_milestone_state_updates(
+    *,
+    agent_name: str,
+    description: str,
+    result: dict,
+    state: object,
+) -> dict[str, str]:
+    """根据 subagent 产物推进里程碑状态机。"""
+    current = getattr(state, "current_milestone", "research")
+    updates: dict[str, str] = {}
+
     if agent_name == "researcher":
-        return "research"
+        has_research = bool(result.get("research_file"))
+        _set_milestone_status(updates, "research", "completed" if has_research else "failed")
+        _set_milestone_status(updates, "script", "in_progress" if has_research else str(getattr(state, "milestone_script", "pending")))
+        updates["current_milestone"] = "script" if has_research else "research"
+        return updates
+
     if agent_name == "scriptwriter":
-        return "script"
+        has_script = bool(result.get("script_file"))
+        has_plan = bool(result.get("script_plan_file"))
+        has_contract = bool(result.get("contract_file"))
+        _set_milestone_status(updates, "research", str(getattr(state, "milestone_research", "pending")))
+        _set_milestone_status(updates, "script", "in_progress" if (has_script and has_plan and has_contract) else "failed")
+        updates["current_milestone"] = "script"
+        return updates
+
     if agent_name == "evaluator":
-        normalized = str(description or "").lower()
-        if "contract_review" in normalized:
-            phase = "contract_review"
-        elif re.search(r"\beval\b", normalized):
-            phase = "eval"
-        else:
-            phase = ""
-        if phase in {"contract_review", "eval"}:
-            return "script"
-    current = getattr(state, "current_milestone", None)
-    return current if isinstance(current, str) and current else None
+        milestone = infer_milestone(description, state, fallback=str(current or "research"))
+        phase = infer_phase(description)
+        payload = _parse_json_message(result["messages"][-1].content)
+        if getattr(state, "milestone_research", None) is not None:
+            _set_milestone_status(updates, "research", str(getattr(state, "milestone_research", "pending")))
+        if getattr(state, "milestone_script", None) is not None and milestone != "script":
+            _set_milestone_status(updates, "script", str(getattr(state, "milestone_script", "pending")))
+        if phase == "contract_review":
+            passed = bool(payload and payload.get("pass"))
+            _set_milestone_status(updates, milestone, "in_progress" if passed else "failed")
+            updates["current_milestone"] = milestone
+            return updates
+        if phase == "eval":
+            passed = bool(payload and payload.get("pass"))
+            _set_milestone_status(updates, milestone, "completed" if passed else "in_progress")
+            updates["current_milestone"] = "done" if (passed and milestone == "script") else milestone
+            return updates
+
+    updates["current_milestone"] = current if isinstance(current, str) and current else "research"
+    return updates
 
 
 def _augment_scriptwriter_description(description: str, state: object) -> str:
@@ -233,9 +269,10 @@ def _build_task_tool(subagents: dict[str, Runnable]) -> type:
                 invoke_input[key] = val
 
         log.info(">>> task(%s) 开始, description: %s", agent_name, description[:120])
-        result = subagents[agent_name].invoke(
-            invoke_input, {"recursion_limit": 50}
-        )
+        with subagent_trace_context():
+            result = subagents[agent_name].invoke(
+                invoke_input, {"recursion_limit": 50}
+            )
         log.info("<<< task(%s) 完成", agent_name)
 
         recovered = _recover_artifact_paths(agent_name, state, result)
@@ -248,8 +285,12 @@ def _build_task_tool(subagents: dict[str, Runnable]) -> type:
             content=summary,
             tool_call_id=tool_call_id,
         )]}
-        if milestone := _infer_milestone_update(agent_name, description, state):
-            updates["current_milestone"] = milestone
+        updates.update(_derive_milestone_state_updates(
+            agent_name=agent_name,
+            description=description,
+            result=result,
+            state=state,
+        ))
         updates.update(_extract_eval_state_updates(agent_name, description, result["messages"][-1].content, state))
         # 恢复产物路径
         for key in ("research_file", "script_plan_file", "script_file", "contract_file", "contract_review_file", "script_eval_file"):

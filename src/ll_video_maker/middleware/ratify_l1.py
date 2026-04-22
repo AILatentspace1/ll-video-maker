@@ -7,28 +7,14 @@ import re
 from pathlib import Path
 
 from langchain.messages import ToolMessage
+from langgraph.types import Command
 
+from ..task_context import infer_milestone, infer_validation_target
 from ..validators import check_script_contract, check_script_plan, check_script_plan_consistency
 from ..tracing import attach_ratify_feedback
 
 logger = logging.getLogger(__name__)
 MAX_RETRY = 2
-
-
-def _infer_validation_target(agent_name: str, description: str, state: object) -> str:
-    if agent_name == "researcher":
-        return "research"
-    if agent_name == "scriptwriter":
-        return "script"
-    if agent_name == "evaluator":
-        normalized = str(description or "").lower()
-        if "contract_review" in normalized:
-            return "contract_review"
-        if re.search(r"\beval\b", normalized):
-            return "script_eval"
-    milestone = getattr(state, "current_milestone", "research")
-    return milestone if isinstance(milestone, str) and milestone else "research"
-
 
 def check_research(output_dir: str) -> list[str]:
     """基础 research 校验。"""
@@ -112,7 +98,7 @@ def _check_json_file(output_dir: str, file_name: str) -> list[str]:
     return []
 
 
-def check_contract_review(output_dir: str) -> list[str]:
+def check_script_contract_review(output_dir: str) -> list[str]:
     return _check_json_file(output_dir, "contract-review.json")
 
 
@@ -123,9 +109,44 @@ def check_script_eval(output_dir: str) -> list[str]:
 CHECKERS = {
     "research": check_research,
     "script": check_script,
-    "contract_review": check_contract_review,
+    "script_contract_review": check_script_contract_review,
     "script_eval": check_script_eval,
 }
+
+
+def _build_failed_milestone_update(
+    *,
+    validation_target: str,
+    tool_call_id: str,
+    feedback: str,
+    state: object,
+) -> Command:
+    """L1 ratify 最终失败时，把状态机显式推进到 failed。"""
+    updates: dict = {
+        "messages": [ToolMessage(
+            content=(
+                f"[L1 审核未通过 - 已重试 {MAX_RETRY} 次]\n"
+                f"里程碑: {validation_target}\n最后反馈:\n{feedback}"
+            ),
+            tool_call_id=tool_call_id,
+        )],
+        "ratify_feedback": feedback,
+    }
+    milestone = validation_target.split("_", 1)[0] if "_" in validation_target else validation_target
+
+    if milestone == "research":
+        updates["current_milestone"] = "research"
+        updates["milestone_research"] = "failed"
+        updates["retry_research"] = int(getattr(state, "retry_research", 0) or 0) + 1
+        updates["milestone_script"] = str(getattr(state, "milestone_script", "pending"))
+    else:
+        updates["current_milestone"] = milestone
+        updates["milestone_research"] = str(getattr(state, "milestone_research", "pending"))
+        if milestone == "script":
+            updates["milestone_script"] = "failed"
+        updates["retry_script"] = int(getattr(state, "retry_script", 0) or 0) + 1
+
+    return Command(update=updates)
 
 
 def make_ratify_middleware() -> object:
@@ -143,7 +164,7 @@ def make_ratify_middleware() -> object:
             ratify_level = getattr(state, "ratify_level", "normal")
             agent_name = request.tool_call["args"].get("agent_name", "")
             task_desc_orig = request.tool_call["args"].get("description", "")
-            validation_target = _infer_validation_target(agent_name, task_desc_orig, state)
+            validation_target = infer_validation_target(agent_name, task_desc_orig, state)
 
             if ratify_level == "fast":
                 return await handler(request)
@@ -174,12 +195,11 @@ def make_ratify_middleware() -> object:
                 attach_ratify_feedback(target=validation_target, passed=False, attempt=attempt, errors=errors)
                 logger.info("[L1 FAIL] milestone=%s attempt=%d errors=%s", validation_target, attempt, errors)
 
-            return ToolMessage(
-                content=(
-                    f"[L1 审核未通过 - 已重试 {MAX_RETRY} 次]\n"
-                    f"里程碑: {validation_target}\n最后反馈:\n{last_feedback}"
-                ),
+            return _build_failed_milestone_update(
+                validation_target=validation_target,
                 tool_call_id=request.tool_call["id"],
+                feedback=last_feedback,
+                state=state,
             )
 
         return l1_auto_ratify
