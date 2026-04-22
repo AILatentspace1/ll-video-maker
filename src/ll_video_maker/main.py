@@ -61,7 +61,7 @@ def main() -> None:
 
     producer = create_producer(project_root=args.project_root)
     thread_id = args.thread_id or f"video-{Path(output_dir).name}"
-    run_id = uuid4().hex[:12]
+    run_id = str(uuid4())
 
     config = build_run_config(
         thread_id=thread_id,
