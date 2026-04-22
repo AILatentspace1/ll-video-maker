@@ -9,6 +9,7 @@ from pathlib import Path
 from langchain.messages import ToolMessage
 
 from ..validators import check_script_contract, check_script_plan, check_script_plan_consistency
+from ..tracing import attach_ratify_feedback
 
 logger = logging.getLogger(__name__)
 MAX_RETRY = 2
@@ -166,9 +167,11 @@ def make_ratify_middleware() -> object:
 
                 if not errors:
                     logger.info("[L1 PASS] milestone=%s attempt=%d", validation_target, attempt)
+                    attach_ratify_feedback(target=validation_target, passed=True, attempt=attempt)
                     return result
 
                 last_feedback = "\n".join(f"- {error}" for error in errors)
+                attach_ratify_feedback(target=validation_target, passed=False, attempt=attempt, errors=errors)
                 logger.info("[L1 FAIL] milestone=%s attempt=%d errors=%s", validation_target, attempt, errors)
 
             return ToolMessage(

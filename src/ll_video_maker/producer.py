@@ -30,6 +30,7 @@ from .llm import get_llm
 from .middleware import make_ratify_middleware
 from .prompts import render_prompt
 from .state import VideoProductionState
+from .tracing import attach_eval_feedback
 
 
 # ── Producer 专用工具 ────────────────────────────────────────────
@@ -171,6 +172,7 @@ def _extract_eval_state_updates(agent_name: str, description: str, content: str,
             )
         updates["eval_round"] = int(getattr(state, "eval_round", 0) or 0) + 1
         updates["must_fix_summary"] = _format_iteration_fixes(updates["iteration_fixes"])
+        attach_eval_feedback(payload)
 
     return updates
 

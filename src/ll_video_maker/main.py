@@ -5,6 +5,7 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from uuid import uuid4
 
 
 def main() -> None:
@@ -58,7 +59,8 @@ def main() -> None:
 
     producer = create_producer(project_root=args.project_root)
     thread_id = args.thread_id or f"video-{Path(output_dir).name}"
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50}
+    run_id = uuid4().hex[:12]
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 50, "run_id": run_id}
 
     user_message = (
         f"请制作视频脚本。\n"
@@ -75,21 +77,32 @@ def main() -> None:
     if args.local_file:
         user_message += f"local_file: {args.local_file}\n"
 
-    print(f"[INFO] 启动 Producer（thread_id={thread_id}）...")
+    print(f"[INFO] 启动 Producer（thread_id={thread_id}, run_id={run_id}）...")
+
+    from .tracing import attach_production_feedback, pipeline_tracing_context
 
     import asyncio
 
     async def _run():
-        return await producer.ainvoke(
-            {
-                "messages": [{"role": "user", "content": user_message}],
-                "output_dir": output_dir,
-                "current_milestone": "research",
-            },
-            config=config,
-        )
+        with pipeline_tracing_context(
+            run_id=run_id,
+            topic=args.topic,
+            duration=args.duration,
+            style=args.style,
+            eval_mode=args.eval_mode,
+        ):
+            return await producer.ainvoke(
+                {
+                    "messages": [{"role": "user", "content": user_message}],
+                    "output_dir": output_dir,
+                    "current_milestone": "research",
+                },
+                config=config,
+            )
 
     result = asyncio.run(_run())
+
+    attach_production_feedback(run_id, output_dir)
 
     if hasattr(result, "interrupts") and result.interrupts:
         print("\n[INFO] 流程已暂停，等待人工操作:")
