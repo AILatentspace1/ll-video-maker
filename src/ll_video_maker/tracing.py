@@ -1,13 +1,14 @@
-"""Tracing helpers — OTel span attributes + optional LangSmith feedback.
+"""LangSmith tracing helpers — all langsmith imports isolated here.
 
-All tracing side-effects are isolated here.  Two backends:
+Every function gracefully degrades when LANGCHAIN_TRACING_V2 is unset
+or the langsmith package is missing.
 
-* **OTel** (LANGSMITH_OTEL_ENABLED=true): writes span attributes/events
-  via ``opentelemetry.trace.get_current_span()``.  Works with any OTel
-  collector backend.
-* **LangSmith** (LANGCHAIN_TRACING_V2=true): writes feedback via
-  ``langsmith.Client.create_feedback()`` on top of OTel spans.
-  Falls back to OTel-only when langsmith client is unavailable.
+Key design: LangGraph (LANGCHAIN_TRACING_V2=true) creates the root trace
+automatically.  We do NOT wrap ``producer.ainvoke()`` with ``tracing_context``
+—that would create a competing, disconnected trace.  Instead we pass
+``metadata`` and ``tags`` via LangGraph config so they attach to the
+automatic trace.  Feedback functions use ``get_current_run_tree()``
+inside the LangGraph execution context.
 """
 from __future__ import annotations
 
@@ -15,18 +16,10 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Union
+from uuid import UUID
 
 logger = logging.getLogger(__name__)
-
-# ── Backend detection ──────────────────────────────────────────────
-
-_OTEL_AVAILABLE = False
-try:
-    from opentelemetry import trace as otel_trace  # type: ignore[import-untyped]
-    _OTEL_AVAILABLE = True
-except ImportError:
-    otel_trace = None  # type: ignore[assignment,misc]
 
 _LANGSMITH_AVAILABLE = False
 try:
@@ -35,28 +28,7 @@ try:
 except ImportError:
     get_current_run_tree = None  # type: ignore[assignment,misc]
 
-_TRACING_ENABLED = (
-    os.getenv("LANGSMITH_OTEL_ENABLED", "").lower() in ("true", "1", "yes")
-    or os.getenv("LANGCHAIN_TRACING_V2", "").lower() in ("true", "1", "yes")
-)
-
-
-# ── Internal helpers ───────────────────────────────────────────────
-
-
-def _otel_span():
-    """Return the current OTel span, or None."""
-    if not _OTEL_AVAILABLE:
-        return None
-    span = otel_trace.get_current_span()
-    if span and span.is_recording():
-        return span
-    return None
-
-
-def _ls_client():
-    from langsmith import Client as LSClient  # type: ignore[import-untyped]
-    return LSClient()
+_TRACING_ENABLED = os.getenv("LANGCHAIN_TRACING_V2", "").lower() in ("true", "1", "yes")
 
 
 # ── Pipeline config builders ────────────────────────────────────────
@@ -65,13 +37,17 @@ def _ls_client():
 def build_run_config(
     *,
     thread_id: str,
-    run_id: str,
+    run_id: UUID,
     topic: str,
     duration: str,
     style: str,
     eval_mode: str,
 ) -> dict:
-    """Build a LangGraph RunnableConfig with tracing metadata/tags."""
+    """Build a LangGraph RunnableConfig with tracing metadata/tags.
+
+    Pass the returned dict directly to ``producer.ainvoke(..., config=config)``.
+    LangGraph will attach metadata and tags to its automatic root trace.
+    """
     return {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": 50,
@@ -99,27 +75,15 @@ def attach_ratify_feedback(
     attempt: int,
     errors: list[str] | None = None,
 ) -> None:
-    """Record an L1 ratify check result."""
-    if not _TRACING_ENABLED:
+    """Record an L1 ratify check result as LangSmith feedback.
+
+    Call after every ``checker(output_dir)`` invocation inside the middleware.
+    Runs inside LangGraph context, so ``get_current_run_tree()`` returns
+    the correct run.
+    """
+    if not _TRACING_ENABLED or not get_current_run_tree:
         return
 
-    # OTel: span attributes (works with any backend)
-    span = _otel_span()
-    if span:
-        try:
-            span.set_attribute(f"ratify.{target}.passed", passed)
-            span.set_attribute(f"ratify.{target}.attempt", attempt)
-            comment = "\n".join(errors) if errors else ("pass" if passed else "fail")
-            span.add_event(
-                f"ratify.{target}",
-                attributes={"passed": passed, "attempt": attempt, "comment": comment},
-            )
-        except Exception as exc:
-            logger.debug("otel ratify feedback failed: %s", exc)
-
-    # LangSmith feedback (optional, on top of OTel)
-    if not _LANGSMITH_AVAILABLE:
-        return
     try:
         rt = get_current_run_tree()
         if rt is None:
@@ -139,28 +103,14 @@ def attach_ratify_feedback(
 
 
 def attach_eval_feedback(eval_result: dict[str, Any]) -> None:
-    """Record weighted eval scores."""
-    if not _TRACING_ENABLED:
+    """Record weighted eval scores as LangSmith feedback.
+
+    Call when evaluator subagent returns ``script-eval.json`` content.
+    Expected keys: ``weighted_total``, ``dimension_scores``.
+    """
+    if not _TRACING_ENABLED or not get_current_run_tree:
         return
 
-    # OTel: span attributes
-    span = _otel_span()
-    if span:
-        try:
-            weighted_total = eval_result.get("weighted_total")
-            if isinstance(weighted_total, (int, float)):
-                span.set_attribute("eval.weighted_total", float(weighted_total) / 100.0)
-            for dim_key in ("narrative_flow", "contract_compliance", "data_accuracy", "pacing", "visual_variety"):
-                dim_scores = eval_result.get("dimension_scores") or eval_result.get("scores") or {}
-                raw = dim_scores.get(dim_key)
-                if isinstance(raw, (int, float)):
-                    span.set_attribute(f"eval.dim.{dim_key}", float(raw) / 100.0)
-        except Exception as exc:
-            logger.debug("otel eval feedback failed: %s", exc)
-
-    # LangSmith feedback (optional)
-    if not _LANGSMITH_AVAILABLE:
-        return
     try:
         rt = get_current_run_tree()
         if rt is None:
@@ -199,13 +149,14 @@ def attach_eval_feedback(eval_result: dict[str, Any]) -> None:
 # ── Production feedback hook ───────────────────────────────────────
 
 
-def attach_production_feedback(run_id: str, output_dir: str) -> None:
-    """Post-run: read script-eval.json and attach scores to the trace.
+def attach_production_feedback(run_id: Union[str, UUID], output_dir: str) -> None:
+    """Post-run: read script-eval.json and upload all dimension scores.
 
-    Inside LangGraph context, writes OTel attributes.
-    With LangSmith, also writes feedback using the explicit run_id.
+    Called from ``main.py`` after ``producer.ainvoke()`` returns.
+    Uses the explicit ``run_id`` (from config) because we're outside
+    the LangGraph execution context at this point.
     """
-    if not _TRACING_ENABLED:
+    if not _TRACING_ENABLED or not run_id:
         return
 
     eval_path = Path(output_dir) / "script-eval.json"
@@ -217,23 +168,6 @@ def attach_production_feedback(run_id: str, output_dir: str) -> None:
     except (json.JSONDecodeError, OSError):
         return
 
-    # OTel: try current span (may or may not be available post-run)
-    span = _otel_span()
-    if span:
-        try:
-            weighted_total = eval_result.get("weighted_total", 0)
-            span.set_attribute("eval.weighted_total", float(weighted_total) / 100.0)
-            for dim_key in ("narrative_flow", "contract_compliance", "data_accuracy", "pacing", "visual_variety"):
-                dim_scores = eval_result.get("dimension_scores") or eval_result.get("scores") or {}
-                raw = dim_scores.get(dim_key)
-                if isinstance(raw, (int, float)):
-                    span.set_attribute(f"eval.dim.{dim_key}", float(raw) / 100.0)
-        except Exception as exc:
-            logger.debug("otel production feedback failed: %s", exc)
-
-    # LangSmith feedback via explicit run_id
-    if not _LANGSMITH_AVAILABLE or not run_id:
-        return
     try:
         client = _ls_client()
         client.create_feedback(
@@ -251,6 +185,14 @@ def attach_production_feedback(run_id: str, output_dir: str) -> None:
                     key=f"dim_{dim_key}",
                     score=float(raw) / 100.0,
                 )
-        logger.info("[OK] production feedback attached (run_id=%s)", run_id[:8])
+        logger.info("[OK] langsmith production feedback attached (run_id=%s)", run_id[:8])
     except Exception as exc:
         logger.debug("langsmith production feedback failed: %s", exc)
+
+
+# ── Internal ───────────────────────────────────────────────────────
+
+
+def _ls_client():
+    from langsmith import Client as LSClient  # type: ignore[import-untyped]
+    return LSClient()

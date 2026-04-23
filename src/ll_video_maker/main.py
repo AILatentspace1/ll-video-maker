@@ -6,7 +6,7 @@ import asyncio
 import os
 import sys
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 
 def main() -> None:
@@ -61,7 +61,7 @@ def main() -> None:
 
     producer = create_producer(project_root=args.project_root)
     thread_id = args.thread_id or f"video-{Path(output_dir).name}"
-    run_id = str(uuid4())
+    run_id = uuid4()
 
     config = build_run_config(
         thread_id=thread_id,
