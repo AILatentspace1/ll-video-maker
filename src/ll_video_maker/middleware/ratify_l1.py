@@ -154,7 +154,7 @@ def make_ratify_middleware() -> object:
     try:
         from langchain.agents.middleware import wrap_tool_call
 
-        @wrap_tool_call
+        @wrap_tool_call(name="l1_ratify")
         async def l1_auto_ratify(request, handler):
             if request.tool_call["name"] != "task":
                 return await handler(request)
