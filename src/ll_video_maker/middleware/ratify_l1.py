@@ -183,8 +183,8 @@ def make_ratify_middleware() -> object:
                 if checker and output_dir:
                     try:
                         errors = checker(output_dir)
-                    except Exception as exc:  # pragma: no cover
-                        logger.warning("ratify checker error: %s", exc)
+                    except Exception:  # pragma: no cover
+                        logger.exception(f"ratify checker error in milestone {validation_target}")
 
                 if not errors:
                     logger.info("[L1 PASS] milestone=%s attempt=%d", validation_target, attempt)
