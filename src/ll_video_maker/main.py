@@ -3,10 +3,22 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 from pathlib import Path
 from uuid import UUID, uuid4
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="[%(asctime)s] %(message)s",
+    datefmt="%H:%M:%S",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("video_maker.log", encoding="utf-8"),
+    ],
+)
+logger = logging.getLogger("video-maker")
 
 
 def main() -> None:
@@ -29,14 +41,14 @@ def main() -> None:
         from .validators import validate_script_artifacts
 
         result = validate_script_artifacts(args.validate_output_dir)
-        print(f"[INFO] validate_output_dir: {args.validate_output_dir}")
+        logger.info(f"validate_output_dir: {args.validate_output_dir}")
         if result["all_errors"]:
-            print("[FAIL] script artifact validation failed")
+            logger.error("script artifact validation failed")
             for section in ("plan", "contract", "consistency"):
                 for item in result[section]:
-                    print(f"- [{section}] {item}")
+                    logger.error(f"- [{section}] {item}")
             raise SystemExit(1)
-        print("[OK] script artifact validation passed")
+        logger.info("script artifact validation passed")
         return
 
     if not args.topic:
@@ -51,13 +63,20 @@ def main() -> None:
     }
     key_name = key_map.get(provider, "ANTHROPIC_API_KEY")
     if not os.getenv(key_name):
-        sys.exit(f"[ERROR] {key_name} 未设置，请配置 .env 文件")
+        logger.error(f"{key_name} 未设置，请配置 .env 文件")
+        sys.exit(1)
 
     from .producer import create_producer, init_output_dir
     from .tracing import attach_production_feedback, build_run_config
 
     output_dir = init_output_dir(args.topic, args.project_root)
-    print(f"[INFO] 输出目录: {output_dir}")
+    
+    # 将日志同时输出到当前生成的目录中
+    file_handler = logging.FileHandler(Path(output_dir) / "execution.log", encoding="utf-8")
+    file_handler.setFormatter(logging.Formatter("[%(asctime)s] [%(name)s] %(message)s", datefmt="%H:%M:%S"))
+    logging.getLogger().addHandler(file_handler)
+
+    logger.info(f"输出目录: {output_dir}")
 
     producer = create_producer(project_root=args.project_root)
     thread_id = args.thread_id or f"video-{Path(output_dir).name}"
@@ -87,7 +106,7 @@ def main() -> None:
     if args.local_file:
         user_message += f"local_file: {args.local_file}\n"
 
-    print(f"[INFO] 启动 Producer（thread_id={thread_id}, run_id={run_id}）...")
+    logger.info(f"启动 Producer（thread_id={thread_id}, run_id={run_id}）...")
 
     async def _run():
         return await producer.ainvoke(
@@ -104,10 +123,10 @@ def main() -> None:
     attach_production_feedback(run_id, output_dir)
 
     if hasattr(result, "interrupts") and result.interrupts:
-        print("\n[INFO] 流程已暂停，等待人工操作:")
+        logger.info("\n流程已暂停，等待人工操作:")
         for interrupt in result.interrupts:
-            print(f"  {interrupt}")
-        print(f"\n恢复命令: python -m ll_video_maker.main --thread-id {thread_id} [其他参数]")
+            logger.info(f"  {interrupt}")
+        logger.info(f"\n恢复命令: python -m ll_video_maker.main --thread-id {thread_id} [其他参数]")
 
 
 if __name__ == "__main__":
