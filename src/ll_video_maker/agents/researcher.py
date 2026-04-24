@@ -8,6 +8,7 @@ from pathlib import Path
 from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_core.runnables import Runnable
+from langchain_core.runnables.config import RunnableConfig
 
 logger = logging.getLogger(__name__)
 from ..llm import get_llm
@@ -16,14 +17,17 @@ from ..prompts import render_prompt
 from .shared import read_file
 
 
-def _run_single_search(query: str) -> str:
+def _run_single_search(query: str, config: RunnableConfig | None = None) -> str:
     from langchain_community.tools import DuckDuckGoSearchResults
 
-    return DuckDuckGoSearchResults(
+    tool = DuckDuckGoSearchResults(
         num_results=5,
         output_format="json",
         keys_to_include=["title", "link", "snippet"],
-    ).run(query)
+    )
+    if config:
+        return tool.invoke(query, config=config)
+    return tool.run(query)
 
 
 def _normalize_queries(queries: list[str], *, limit: int = 5) -> list[str]:
@@ -44,24 +48,31 @@ def _normalize_queries(queries: list[str], *, limit: int = 5) -> list[str]:
 
 
 @tool
-def web_search(query: str) -> str:
+def web_search(query: str, config: RunnableConfig) -> str:
     """搜索网络，返回带 title/link/snippet 的结果摘要；link 必须写入 research.md Sources。"""
     try:
-        return _run_single_search(query)
+        return _run_single_search(query, config)
     except Exception as e:
         logger.exception(f"搜索单条 query 失败: {query}")
         return f"[搜索失败] {e}"
 
 
 @tool
-def parallel_web_search(queries: list[str]) -> str:
+def parallel_web_search(queries: list[str], config: RunnableConfig) -> str:
     """并行搜索多个 query，返回带 title/link/snippet 的合并摘要；link 必须写入 research.md Sources。"""
     normalized = _normalize_queries(queries)
     if not normalized:
         return "[搜索失败] 空 queries"
 
+    from langchain_core.runnables.config import ensure_config
+    
+    # 获取 current config 并浅拷贝传递给每个子任务
+    local_config = ensure_config(config)
+
     with ThreadPoolExecutor(max_workers=min(len(normalized), 5)) as executor:
-        future_to_query = {executor.submit(_run_single_search, q): q for q in normalized}
+        future_to_query = {
+            executor.submit(_run_single_search, q, local_config): q for q in normalized
+        }
         ordered: dict[str, str] = {}
         for future in as_completed(future_to_query):
             query = future_to_query[future]

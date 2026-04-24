@@ -17,7 +17,7 @@ class Config:
     JUDGE_MODEL: str = "deepseek-v4-flash"
     EVALUATOR_MODEL: str = ""
     DEEPSEEK_API_KEY: str = ""
-    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     ANTHROPIC_API_KEY: str = ""
     ANTHROPIC_BASE_URL: str = "https://api.anthropic.com"
     ZHIPU_API_KEY: str = ""
