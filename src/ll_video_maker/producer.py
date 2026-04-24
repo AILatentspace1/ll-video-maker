@@ -144,9 +144,81 @@ def _parse_json_message(content: str) -> dict | None:
         return None
 
 
-def _extract_eval_state_updates(agent_name: str, description: str, content: str, state: object) -> dict:
+def _child_config(base: dict, *, agent_name: str, description: str) -> dict:
+    """从根 config 派生子 agent config：去掉 run_id / configurable，注入追踪元数据。"""
+    from .task_context import infer_milestone, infer_phase
+
+    run_id = base.get("run_id")
+    configurable = base.get("configurable") or {}
+    thread_id = configurable.get("thread_id", "")
+    milestone = infer_milestone(description, None, fallback="")
+    phase = infer_phase(description)
+
+    base_meta = dict(base.get("metadata") or {})
+    child_meta = {
+        **base_meta,
+        "agent_name": agent_name,
+        "milestone": milestone,
+        "phase": phase,
+        "thread_id": thread_id,
+    }
+    if run_id is not None:
+        child_meta["pipeline_run_id"] = str(run_id)
+
+    base_tags = list(base.get("tags") or [])
+    extra_tags = [f"agent:{agent_name}"]
+    if milestone:
+        extra_tags.append(f"milestone:{milestone}")
+    if phase:
+        extra_tags.append(f"phase:{phase}")
+    child_tags = base_tags + extra_tags
+
+    child: dict = {}
+    for key in base:
+        if key in ("run_id", "configurable"):
+            continue
+        child[key] = base[key]
+    child["metadata"] = child_meta
+    child["tags"] = child_tags
+    return child
+
+
+def _root_langsmith_extra(config: dict) -> dict:
+    """返回根 agent LangSmith extra，注入 pipeline_run_id / thread_id。"""
+    run_id = config.get("run_id")
+    configurable = config.get("configurable") or {}
+    thread_id = configurable.get("thread_id", "")
+    base_meta = dict(config.get("metadata") or {})
+    meta = {
+        **base_meta,
+        "thread_id": thread_id,
+    }
+    if run_id is not None:
+        meta["pipeline_run_id"] = str(run_id)
+    return {"run_id": run_id, "metadata": meta}
+
+
+def _extract_eval_state_updates(
+    agent_name: str,
+    description: str,
+    content: str,
+    state: object,
+    context: dict | None = None,
+) -> dict:
     updates: dict = {}
     payload = _parse_json_message(content)
+
+    # Fall back to reading the result file when content is not parseable JSON
+    if agent_name == "evaluator" and not payload and context:
+        phase_hint = infer_phase(description)
+        file_key = "contract_review_file" if phase_hint == "contract_review" else "script_eval_file"
+        result_file = context.get(file_key)
+        if result_file:
+            try:
+                payload = json.loads(Path(result_file).read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
     if agent_name != "evaluator" or not payload:
         return updates
 
@@ -241,6 +313,45 @@ def _augment_scriptwriter_description(description: str, state: object) -> str:
     return description
 
 
+def _maybe_short_circuit_evaluator(
+    agent_name: str,
+    description: str,
+    state: object,
+) -> dict | None:
+    """在调用 LLM evaluator 之前运行确定性预检。
+    若预检发现严重问题，直接写入结果文件并返回产物 dict，跳过 LLM 调用。
+    返回 None 表示预检通过，继续正常流程。
+    """
+    from .validators import run_evaluator_precheck
+
+    if agent_name != "evaluator":
+        return None
+
+    milestone = infer_milestone(description, state, fallback="script")
+    phase = infer_phase(description)
+    output_dir = getattr(state, "output_dir", "") or ""
+    if not output_dir:
+        return None
+
+    result = run_evaluator_precheck(output_dir, milestone=milestone, phase=phase)
+    if result is None:
+        return None
+
+    # Precheck found issues — persist result and short-circuit
+    if phase == "eval":
+        result_path = Path(output_dir) / "script-eval.json"
+        result_key = "script_eval_file"
+    elif phase == "contract_review":
+        result_path = Path(output_dir) / "contract-review.json"
+        result_key = "contract_review_file"
+    else:
+        return None
+
+    result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    log.info("~~~ precheck short-circuit: %s → %s", agent_name, str(result_path))
+    return {result_key: str(result_path)}
+
+
 def _build_task_tool(subagents: dict[str, Runnable]) -> type:
     @tool
     def task(
@@ -269,7 +380,19 @@ def _build_task_tool(subagents: dict[str, Runnable]) -> type:
             if val:
                 invoke_input[key] = val
 
-        child_config = {**parent_config, "recursion_limit": 50}
+        # Evaluator precheck: skip LLM call if deterministic checks already fail
+        short_circuit = _maybe_short_circuit_evaluator(agent_name, description, state)
+        if short_circuit is not None:
+            sc_summary = _summarize_tool_result(agent_name, description, {**short_circuit, "messages": [{"content": ""}]}, state)
+            sc_updates: dict = {"messages": [ToolMessage(content=sc_summary, tool_call_id=tool_call_id)]}
+            sc_updates.update(_extract_eval_state_updates(agent_name, description, "", state, context=short_circuit))
+            for key in ("contract_review_file", "script_eval_file"):
+                if val := short_circuit.get(key):
+                    sc_updates[key] = val
+            return Command(update=sc_updates)
+
+        child_config = _child_config(parent_config, agent_name=agent_name, description=description)
+        child_config["recursion_limit"] = 50
         log.info(">>> task(%s) 开始, description: %s", agent_name, description[:120])
         result = subagents[agent_name].invoke(invoke_input, child_config)
         log.info("<<< task(%s) 完成", agent_name)
@@ -290,7 +413,7 @@ def _build_task_tool(subagents: dict[str, Runnable]) -> type:
             result=result,
             state=state,
         ))
-        updates.update(_extract_eval_state_updates(agent_name, description, result["messages"][-1].content, state))
+        updates.update(_extract_eval_state_updates(agent_name, description, result["messages"][-1].content, state, context=result))
         # 恢复产物路径
         for key in ("research_file", "script_plan_file", "script_file", "contract_file", "contract_review_file", "script_eval_file"):
             if val := result.get(key):

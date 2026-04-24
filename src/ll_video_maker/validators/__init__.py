@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .evaluator_precheck import run_evaluator_precheck
 from .script_contract import check_script_contract
 from .script_plan import check_script_plan
 from .script_plan_consistency import check_script_plan_consistency
@@ -33,6 +34,7 @@ def validate_script_artifacts(output_dir: str) -> dict[str, list[str]]:
 
 __all__ = [
     "check_script_contract",
+    "run_evaluator_precheck",
     "check_script_plan",
     "check_script_plan_consistency",
     "validate_script_artifacts",

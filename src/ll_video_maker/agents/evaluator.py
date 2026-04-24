@@ -12,16 +12,6 @@ from ..config import cfg
 from ..prompts import render_prompt
 from .shared import read_file
 
-
-@tool
-def read_file(file_path: str) -> str:
-    """读取任意文件内容。"""
-    try:
-        return Path(file_path).read_text(encoding="utf-8")
-    except (FileNotFoundError, OSError) as e:
-        return f"[读取失败] {e}"
-
-
 @tool
 def write_eval_result(output_dir: str, result_json: str, phase: str = "eval") -> str:
     """写入评估结果 JSON。phase: contract_review | eval。"""
@@ -39,7 +29,7 @@ SYSTEM_PROMPT = render_prompt("evaluator")
 
 
 def create_evaluator_agent() -> Runnable:
-    model = get_llm(cfg.JUDGE_MODEL, temperature=0.2)
+    model = get_llm(cfg.EVALUATOR_MODEL, temperature=0.2)
     return create_agent(
         model=model,
         tools=[read_file, write_eval_result],
