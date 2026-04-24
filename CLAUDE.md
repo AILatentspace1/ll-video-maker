@@ -68,9 +68,9 @@ Script rules: scene count in range, no 3+ consecutive same type, required fields
 LLM_PROVIDER=deepseek          # deepseek | zhipu | anthropic
 DEEPSEEK_API_KEY=sk-...
 DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
-PRODUCER_MODEL=deepseek-chat
-SUBAGENT_MODEL=deepseek-chat
-JUDGE_MODEL=deepseek-chat
+PRODUCER_MODEL=deepseek-v4-flash
+SUBAGENT_MODEL=deepseek-v4-flash
+JUDGE_MODEL=deepseek-v4-flash
 
 # LangSmith tracing
 LANGCHAIN_TRACING_V2=true
