@@ -48,7 +48,7 @@
 | `scripts/verify.py` | **本地 + CI 共用的一键验证入口**（Python，不是 bash）。核心是 `--tier {quick,smoke,full}` 三档（见下"验证分层"小节）；内部用 `subprocess.run` 调 ruff/pytest/main.py；失败即 `sys.exit(非 0)`。 |
 | `scripts/check_eval.py` | `verify.py` 导入的模块（也可单独 CLI 调）：接收**显式 `output_dir` 参数**（不做"找最近目录"启发式），解析 `script-eval.json` 并兼容两种并存 schema（见下"schema drift 处理"），返回 `{pass, weighted_total, source_schema, warnings}`。 |
 | `.claude/commands/auto-feature.md` | Slash command 定义；指导 Claude 按 6 步走并调 `python scripts/verify.py`；明确边界（只改 src/ tests/ docs/，不动 pyproject/config.py/prompts/）。 |
-| `.github/workflows/ci.yml` | **分层设计**：默认 job（所有 PR）跑 `--tier quick`（无 LLM 调用）；条件 job（agents/prompts/producer/middleware/validators 变更时）跑 `--tier smoke`；`workflow_dispatch` 手动触发可选 tier；nightly schedule 跑 `--tier full`。见下"CI 分层"小节。 |
+| `.github/workflows/ci.yml` | **分层设计**：默认 job（所有 PR）跑 `--tier quick`（无 LLM 调用）；`workflow_dispatch` 手动触发可选 `smoke/full`；PoC 阶段**不启用 schedule**。等 `/auto-feature` demo 成功后，再单独 PR 开 nightly smoke/full。见下"CI 分层"小节。 |
 | `.gitignore` 追加 | `.auto-feature/` 工作目录、`coverage.xml`、`.coverage`、`htmlcov/` |
 
 ### 修改
@@ -76,7 +76,7 @@
   - 强化 `prompts/evaluator.md` 让模型严格按 canonical schema 输出（碰 prompt，需人工）
   - `producer.py` magic number 抽离到 `config.py`（改核心编排 + 默认配置，需人工）
   - `docs/TODOS.md` 里的 "eval-the-eval judge validation"（需改 evaluator prompt 行为）
-  - 实现 `evals/evaluators.py` + `tests/eval/` + 启用 `full` tier schedule（依赖上一项）
+  - 实现 `evals/evaluators.py` + `tests/eval/` + 后续评估是否启用 `full` tier nightly schedule（依赖上一项）
   - 锁定 coverage 门槛（Phase B，等基线出来后独立 PR 加 `--cov-fail-under`）
 
 - Agent 输出 `.auto-feature/current.md` 含：选了哪个、为什么（价值/风险评估）、排除了哪些、预估改动范围。
@@ -87,12 +87,12 @@
 |---|---|---|---|---|
 | `quick`（默认） | ruff + pytest + 可选 mypy | 所有普通 PR / 本地快速循环 | ❌ 无 | ✅ 实现 |
 | `smoke` | quick + 一次小 topic pipeline + `check_eval`（canonical/drift 都要过 `pass==true AND weighted_total>=75`） | 触碰核心逻辑（agents/prompts/producer/middleware/validators）时 / `/auto-feature` PoC 演示 | ✅ DEEPSEEK_API_KEY | ✅ 实现 |
-| `full` | smoke + eval 套件（`pytest tests/eval/`） | 未来：nightly 完整质量评估 | ✅ DEEPSEEK_API_KEY + LANGSMITH_API_KEY | ⚠️ **占位** |
+| `full` | smoke + eval 套件（`pytest tests/eval/`） | 未来：手动完整质量评估；PoC 后再考虑 nightly | ✅ DEEPSEEK_API_KEY + LANGSMITH_API_KEY | ⚠️ **占位** |
 
 **`full` 的占位策略**（PoC 阶段 `tests/eval/` 和 `evals/evaluators.py` 还不存在，见 `docs/TODOS.md:19/24/46`）：
 - `verify.py --tier full` 内部先 `Path("tests/eval").exists()` 检查；不存在时打印 `[SKIP] tests/eval/ not yet implemented — see docs/TODOS.md` 并以 `exit 0` 返回（不当失败）。仍跑 smoke 的全部内容。
-- CI workflow 里 **不把 `full` 加到 schedule 触发**，只保留 `workflow_dispatch` 可选入口；nightly 只跑 smoke。等 `evals/evaluators.py` 实现后再加 schedule。
-- `docs/BACKLOG.md` 里明确列"实现 evals/evaluators.py + 启用 full tier schedule"作为后置任务。
+- CI workflow 里 **PoC 阶段不启用任何 schedule**，只保留 `workflow_dispatch` 可选入口；等 `/auto-feature` demo 成功且 `evals/evaluators.py` 实现后，再单独 PR 加 nightly smoke/full。
+- `docs/BACKLOG.md` 里明确列"实现 evals/evaluators.py + 评估是否启用 full tier nightly schedule"作为后置任务。
 
 命令：`python scripts/verify.py --tier quick`（默认）/ `--tier smoke` / `--tier full`（占位）。
 另支持 `--topic "量子计算入门"` 覆盖 smoke 默认 topic，`--no-cov` 跳过覆盖率（本地快速迭代）。
@@ -101,7 +101,7 @@
 - 静态：`ruff check --output-format=github` 必须零错误
 - 单测（**Phase A：测量，不 gate**）：`pytest --cov=src/ll_video_maker --cov-report=xml --cov-report=term -v`；CI 上传 `coverage.xml` 为 artifact、在 PR 评论显示覆盖率摘要，但**不加 `--cov-fail-under`**，覆盖率不参与合并判定
 - 单测（**Phase B：锁门槛，后续 PR**）：等基础设施 PR 合进去、跑过 1-2 次拿到稳定基线后，再在独立 PR 里追加 `--cov-fail-under=<基线-2%>`，并加 `diff-cover` 类工具锁改动行覆盖率
-- Pipeline（smoke/full）：固定小话题 `--topic "量子计算入门" --duration 1-3min --style professional --source websearch`，一次 ~4–6 次 LLM 调用
+- Pipeline（smoke/full）：固定小话题 `--topic "量子计算入门" --duration 1-3min --style professional --source websearch`，一次 ~4–6 次 LLM 调用；`verify.py` 必须使用隔离的 `--project-root .auto-feature/smoke-runs/<run-id>`，然后只在该空目录下解析本次唯一生成的 output 子目录（或解析 stdout 中的 `输出目录:`），禁止扫描全局 `output/` 的 latest 目录
 - Eval（smoke/full）：`scripts/check_eval.py` 兼容两种 schema，要求 `pass==true` 且 `weighted_total>=75`
 
 > **为什么分两步**：现在仓库从没跑过 coverage，基线未知。如果首个基础设施 PR 自己就锁 60%，极可能自己把自己卡红（现有 16 个测试很可能覆盖不到 60%）。先测量、看清基线、再锁——这是通用原则，适用于所有"量化指标门槛"（coverage / bundle size / perf budget）。
@@ -157,7 +157,7 @@ def parse_eval(data: dict) -> EvalResult:
 
 ### 2.6 CI 分层（.github/workflows/ci.yml 设计）
 
-四个 job：`quick`（阻塞） → `changes`（路径检测） → `smoke`（条件触发） / `full`（手动占位）。以下是**执行时直接落地的真实 YAML**（无伪代码）：
+PoC 阶段三个 job：`quick`（阻塞） → `smoke`（仅手动触发） / `full`（手动占位）。先不加 schedule，也不让路径变更自动触发 LLM；等 demo 成功后再单独 PR 增加 `changes` + nightly smoke。以下是**执行时直接落地的真实 YAML**（无伪代码）：
 
 ```yaml
 name: verify
@@ -173,8 +173,6 @@ on:
         type: choice
         options: [quick, smoke, full]
         default: smoke
-  schedule:
-    - cron: '0 18 * * *'  # 02:00 CST；PoC 阶段仅触发 smoke，不触发 full
 
 jobs:
   quick:
@@ -191,31 +189,10 @@ jobs:
       group: quick-${{ github.ref }}
       cancel-in-progress: true
 
-  changes:
-    # 用 dorny/paths-filter 判断是否动了核心路径
-    runs-on: ubuntu-latest
-    outputs:
-      core: ${{ steps.filter.outputs.core }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            core:
-              - 'src/ll_video_maker/agents/**'
-              - 'src/ll_video_maker/prompts/**'
-              - 'src/ll_video_maker/producer.py'
-              - 'src/ll_video_maker/middleware/**'
-              - 'src/ll_video_maker/validators/**'
-
   smoke:
-    # 条件触发：核心路径变更 / schedule / workflow_dispatch(smoke|full)
-    needs: [quick, changes]
-    if: |
-      needs.changes.outputs.core == 'true' ||
-      github.event_name == 'schedule' ||
-      (github.event_name == 'workflow_dispatch' && inputs.tier != 'quick')
+    # PoC 阶段仅手动触发；后续单独 PR 再加入 paths-filter / schedule
+    needs: quick
+    if: github.event_name == 'workflow_dispatch' && inputs.tier != 'quick'
     runs-on: ubuntu-latest
     env:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
@@ -232,7 +209,7 @@ jobs:
 
   full:
     # PoC 阶段仅 workflow_dispatch(tier=full) 触发；不接 schedule
-    # 等 tests/eval/ 和 evals/evaluators.py 到位后改 if 表达式加入 schedule
+    # 等 tests/eval/ 和 evals/evaluators.py 到位后，单独 PR 再决定是否加入 schedule
     if: github.event_name == 'workflow_dispatch' && inputs.tier == 'full'
     needs: quick
     runs-on: ubuntu-latest
@@ -248,7 +225,7 @@ jobs:
       - run: python scripts/verify.py --tier full   # verify.py 检测 tests/eval 不存在时 SKIP 并 exit 0
 ```
 
-**分支保护**：repo 设置里只把 `quick` 设为 required check，`smoke` / `full` 作为通知型（失败不阻塞合并，但 PR 作者能看到）。
+**分支保护**：repo 设置里只把 `quick` 设为 required check；PoC 阶段 `smoke` / `full` 仅手动触发，用于人工验证，不作为 required check。
 - warnings 要打印出来，让 PR 作者看到漂移告警
 - 为了以防未来再漂，脚本要**整体 try/except**，schema 失败时明确打印 "UNKNOWN SCHEMA, human review required" 而不是当成通过
 
@@ -273,6 +250,13 @@ jobs:
 - ❌ `.claude/commands/auto-feature.md`（防止自改规则）
 
 违反禁区时 `/auto-feature` 必须立即停手、报告"需要用户批准才能动 X，放弃本次任务"，不要偷偷改。
+
+**PR / 工作区 preflight**（`/auto-feature` 执行前必须检查）：
+- `git status --short` 必须 clean；若不 clean，立即停止并报告需要用户处理。
+- `gh auth status` 必须通过；否则不创建 PR，只输出本地验证结果和后续命令。
+- 必须存在可 push 的 remote/upstream；否则停止，不创建 branch/worktree。
+- 创建 worktree/branch 前先确认目标 `auto/<slug>-<date>` 不存在；冲突时换 slug 或停止。
+- preflight 不通过时禁止进入实现步骤，避免半自动改动残留。
 
 **成本护栏**（适用两层）：
 - 单次 `/auto-feature` 循环硬上限：**1 次 pipeline 运行**（≈ 0.5–1 美元 deepseek 成本），2 轮自修复
@@ -317,7 +301,7 @@ gh pr list --author "@me" --state open
 **成功标准**：
 - `/auto-feature` 选了 BACKLOG 中一项，写进 `.auto-feature/current.md`
 - 开了 `auto/*` 分支，commit 至少含"代码 + 对应测试 + CHANGELOG/更新说明"
-- `scripts/verify.sh` 绿，eval JSON 满足门槛
+- `python scripts/verify.py --tier quick/smoke` 绿，eval JSON 满足门槛
 - GitHub PR 已开（draft），body 完整
 
 **失败降级**：如果 pipeline 阶段因为网络或 API 限流失败，PR 仍然开但标 `[NEEDS HELP: pipeline unverified]`，不占用"成功"额度。
@@ -328,21 +312,21 @@ gh pr list --author "@me" --state open
 
 1. **CI 分层，不是每 PR 都跑 pipeline**（对齐 `docs/TODOS.md` 现有设计）：
    - `quick`（所有 PR / 默认阻塞）：ruff + pytest，无 LLM 调用
-   - `smoke`（条件触发：agents/prompts/producer/middleware/validators 变更、手动 dispatch、nightly）：含真实 pipeline + eval 校验
-   - `full`（**PoC 阶段占位**：仅 workflow_dispatch 手动触发；不接 schedule）：等 `tests/eval/` + `evals/evaluators.py` 实现后再开 schedule
-   - 只有 `quick` 是合并必过项；`smoke` 是通知型
+   - `smoke`（PoC 阶段仅 workflow_dispatch 手动触发）：含真实 pipeline + eval 校验
+   - `full`（**PoC 阶段占位**：仅 workflow_dispatch 手动触发；不接 schedule）：等 `tests/eval/` + `evals/evaluators.py` 实现后，再单独 PR 决定是否开 nightly
+   - 只有 `quick` 是合并必过项；`smoke/full` 是人工验证入口
    - Secrets：`DEEPSEEK_API_KEY` 给 smoke；`LANGSMITH_API_KEY` 留到 full 真正启用时再加
-2. **BACKLOG 由我播种**：基于 Explore 扫描直接写 7 条候选（schema drift 修复排首位，见上节"关键设计决策 1"）
-3. **立即端到端跑一次**：基础设施建好后，在同一 session 里触发 `/auto-feature` 做演示。预计额外成本 ~0.5–1 美元 deepseek。
+2. **BACKLOG 由我播种**：基于 Explore 扫描直接写 6 条候选（schema drift 修复排首位，见上节"关键设计决策 1"）
+3. **立即端到端跑一次**：基础设施建好后，在同一 session 里触发 `/auto-feature` 做演示。预计额外成本 ~0.5–1 美元 deepseek。演示前必须通过 GitHub/工作区 preflight。
 
 ## 执行顺序（批准后）
 
 0. **移动本计划文件到 `docs/plans/autonomous-feature-loop.md`**（语义化重命名）；原 `~/.claude/plans/sharded-painting-wirth.md` 删除。plan 与代码一起版本化，便于 review 和演进对比。
-1. 建 `docs/BACKLOG.md`（播种 7 条，schema drift 排首位）
+1. 建 `docs/BACKLOG.md`（播种 6 条，schema drift 排首位）
 2. 建 `scripts/verify.py` + `scripts/check_eval.py`（Python 一套，`--tier {quick,smoke,full}`）
 3. 建 `.claude/commands/auto-feature.md`
 4. 改 `pyproject.toml`（pytest-cov / mypy / coverage 配置，Phase A 不锁 `--cov-fail-under`）
-5. 建 `.github/workflows/ci.yml`（三档 job：quick 默认阻塞、smoke 路径触发、full schedule）
+5. 建 `.github/workflows/ci.yml`（PoC 三档 job：quick 默认阻塞、smoke/full 仅 workflow_dispatch；不启用 schedule）
 6. 更新 `CLAUDE.md` 和 `.gitignore`
 7. **本地先跑 `python scripts/verify.py --tier quick`** 确认静态+单测通路
 8. 再本地跑 `python scripts/verify.py --tier smoke` 确认 pipeline+eval 通路（验证 check_eval.py 对两种 schema 的处理）
