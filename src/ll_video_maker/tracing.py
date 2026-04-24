@@ -95,8 +95,8 @@ def attach_ratify_feedback(
             comment="\n".join(errors) if errors else ("pass" if passed else "fail"),
             metadata={"target": target, "attempt": attempt},
         )
-    except Exception as exc:
-        logger.debug("langsmith ratify feedback failed: %s", exc)
+    except Exception:
+        logger.exception(f"langsmith ratify feedback failed for run_id={run_id}")
 
 
 # ── Evaluator feedback ─────────────────────────────────────────────
@@ -142,8 +142,8 @@ def attach_eval_feedback(eval_result: dict[str, Any]) -> None:
                     score=float(raw) / 100.0,
                     metadata={"weight": weight},
                 )
-    except Exception as exc:
-        logger.debug("langsmith eval feedback failed: %s", exc)
+    except Exception:
+        logger.exception(f"langsmith eval feedback failed for run_id={run_id}")
 
 
 # ── Production feedback hook ───────────────────────────────────────
@@ -186,8 +186,8 @@ def attach_production_feedback(run_id: Union[str, UUID], output_dir: str) -> Non
                     score=float(raw) / 100.0,
                 )
         logger.info("[OK] langsmith production feedback attached (run_id=%s)", str(run_id)[:8])
-    except Exception as exc:
-        logger.debug("langsmith production feedback failed: %s", exc)
+    except Exception:
+        logger.exception(f"langsmith production feedback failed for run_id={run_id}")
 
 
 # ── Internal ───────────────────────────────────────────────────────

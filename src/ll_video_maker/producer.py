@@ -140,7 +140,7 @@ def _format_iteration_fixes(iteration_fixes: list[dict]) -> str:
 def _parse_json_message(content: str) -> dict | None:
     try:
         return json.loads(content)
-    except Exception:
+    except json.JSONDecodeError:
         return None
 
 
@@ -216,7 +216,7 @@ def _extract_eval_state_updates(
         if result_file:
             try:
                 payload = json.loads(Path(result_file).read_text(encoding="utf-8"))
-            except Exception:
+            except (OSError, json.JSONDecodeError):
                 pass
 
     if agent_name != "evaluator" or not payload:

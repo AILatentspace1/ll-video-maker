@@ -1,12 +1,15 @@
 """Researcher subagent — 对应 agents/researcher.md。"""
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from langchain.agents import create_agent
-from langchain_core.runnables import Runnable
 from langchain.tools import tool
+from langchain_core.runnables import Runnable
+
+logger = logging.getLogger(__name__)
 from ..llm import get_llm
 from ..config import cfg
 from ..prompts import render_prompt
@@ -46,6 +49,7 @@ def web_search(query: str) -> str:
     try:
         return _run_single_search(query)
     except Exception as e:
+        logger.exception(f"搜索单条 query 失败: {query}")
         return f"[搜索失败] {e}"
 
 
@@ -64,6 +68,7 @@ def parallel_web_search(queries: list[str]) -> str:
             try:
                 ordered[query] = future.result()
             except Exception as e:
+                logger.exception(f"并行搜索抛出异常 query={query}")
                 ordered[query] = f"[搜索失败] {e}"
 
     merged: list[str] = []
