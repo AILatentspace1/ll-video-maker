@@ -30,7 +30,9 @@
 
 ### 当 `source = websearch`
 
-执行 3-5 次搜索，尽量覆盖：
+优先一次性构造 3-5 个搜索 query，并调用 `parallel_web_search` 批量搜索；仅当某个 query 需要单独补充时再调用 `web_search`。
+
+尽量覆盖：
 
 1. 最新动态
    - 新产品发布、更新、关键行业事件
@@ -50,6 +52,14 @@
 - `{topic} market trends`
 - `{topic} expert review`
 - `{topic} statistics data`
+
+执行要求：
+
+- 默认先生成一组 query，再调用 `parallel_web_search`
+- 搜索结果中的 `link` 是强制证据字段；写入 `research.md` 时必须原样保留可访问 URL
+- 对返回结果去重，只保留和主题强相关的信息
+- 某个 query 搜索失败时继续，不要因为单次失败中断整个 research
+- 写入 research 时，只保留真正用到的来源
 
 ### 当用户提供 `notebook_url` 或 `local_file`
 
@@ -95,6 +105,9 @@
 
 ## 5. Sources
 - URL 列表，标明来源类型和日期
+- 必须至少包含 3 个以 `http://` 或 `https://` 开头的 URL
+- 禁止只写来源名称而不写 URL
+- 如果搜索结果没有可用 URL，不要写入文件；必须继续搜索或明确标注 `[insufficient data]` 并附上已有 URL
 
 ## 6. Style spine 建议
 - 配色
@@ -131,3 +144,7 @@
 - 不要写最终脚本
 - 不要编造数字、引语或来源
 - 如果证据不足，要标注 `[insufficient data]`
+- 调用 `write_research` 前必须自检：
+  1. `## 5. Sources` 存在
+  2. 全文至少包含 3 个 `http://` 或 `https://` URL
+  3. 每个关键数据点至少能对应一个 Sources URL

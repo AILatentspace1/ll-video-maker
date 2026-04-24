@@ -14,6 +14,8 @@ def test_scriptwriter_prompt_is_clean_utf8_text():
     assert "type:" in prompt
     assert "contract_topic:" in prompt
     assert "narrative_role:" in prompt
+    assert "Data accuracy / source attribution" in prompt
+    assert "No `data_card` contains unsupported numbers." in prompt
 
 
 def test_scriptwriter_prompt_file_round_trips_as_utf8():

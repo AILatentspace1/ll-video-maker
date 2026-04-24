@@ -17,6 +17,16 @@ def normalize_contract_topic(value: str) -> str:
     return text.strip()
 
 
+def contract_topic_and_role(item: object) -> tuple[str, str]:
+    """Return (topic, role) from either new dict or legacy/string contract item."""
+    if isinstance(item, dict):
+        return (
+            normalize_contract_topic(item.get("topic", "")),
+            str(item.get("narrative_role", "")).strip(),
+        )
+    return normalize_contract_topic(str(item or "")), ""
+
+
 def _load_plan(plan_path: Path) -> dict | None:
     try:
         return json.loads(plan_path.read_text(encoding="utf-8"))
@@ -79,8 +89,7 @@ def check_script_plan(output_dir: str) -> list[str]:
     }
     key_topics = contract.get("key_topics") or []
     for item in key_topics:
-        topic = normalize_contract_topic(item.get("topic", ""))
-        expected_role = str(item.get("narrative_role", "")).strip()
+        topic, expected_role = contract_topic_and_role(item)
         if not topic:
             continue
         scene = topic_map.get(topic)

@@ -40,6 +40,29 @@ Do not skip the planning pass.
    - Do not use Markdown emphasis like `**type:**`
    - Do not use list-style field markers like `- type:`
 
+## First-pass Quality Checklist
+
+Before writing `script.md`, you must self-check against these evaluator-aligned rules:
+
+1. **Data accuracy / source attribution**
+   - Every number, comparison, ranking, percentage, benchmark, or quote must be supported by `research.md`.
+   - If a number is not explicitly supported by research, remove it or mark it as qualitative language.
+   - `data_card` scenes must not contain invented numbers.
+2. **Contract compliance**
+   - Every contract topic must appear exactly in plan + script.
+   - Topic-role mapping must remain correct.
+   - Scene order and scene count must stay aligned with the plan.
+3. **Narrative flow**
+   - Adjacent scenes should have a visible reason to connect.
+   - Avoid abrupt jumps between technical explanation, market data, and CTA.
+4. **Pacing**
+   - Do not let a single exposition-heavy scene become too long if it can be split or tightened.
+5. **Visual variety**
+   - Avoid overusing one scene type.
+   - If multiple technical points appear back-to-back, introduce a visual break scene when possible.
+
+If any item above fails, fix the plan or script before writing the final `script.md`.
+
 ## Pass 1: Write `script-plan.json`
 
 First generate a strict JSON object and write it to `script-plan.json`.
@@ -273,5 +296,7 @@ Before writing `script.md`, verify:
 7. Every contract topic is covered.
 8. Every topic-role mapping is correct.
 9. The script remains faithful to the plan.
+10. Every numeric claim or quote is traceable to `research.md`.
+11. No `data_card` contains unsupported numbers.
 
 Only then write the final `script.md`.

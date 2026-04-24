@@ -185,7 +185,7 @@ def attach_production_feedback(run_id: Union[str, UUID], output_dir: str) -> Non
                     key=f"dim_{dim_key}",
                     score=float(raw) / 100.0,
                 )
-        logger.info("[OK] langsmith production feedback attached (run_id=%s)", run_id[:8])
+        logger.info("[OK] langsmith production feedback attached (run_id=%s)", str(run_id)[:8])
     except Exception as exc:
         logger.debug("langsmith production feedback failed: %s", exc)
 

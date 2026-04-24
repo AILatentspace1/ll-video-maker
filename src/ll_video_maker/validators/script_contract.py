@@ -5,7 +5,7 @@ import json
 import re
 from pathlib import Path
 
-from .script_plan import normalize_contract_topic
+from .script_plan import contract_topic_and_role, normalize_contract_topic
 
 
 def _extract_scenes(script_text: str) -> list[dict[str, object]]:
@@ -136,8 +136,7 @@ def check_script_contract(output_dir: str) -> list[str]:
 
     key_topics = contract.get("key_topics") or []
     for item in key_topics:
-        topic = normalize_contract_topic(item.get("topic", ""))
-        expected_role = str(item.get("narrative_role", "")).strip()
+        topic, expected_role = contract_topic_and_role(item)
         if not topic:
             continue
         matched_scene = _find_topic_scene(scenes, topic)

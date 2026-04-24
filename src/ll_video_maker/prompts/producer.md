@@ -64,6 +64,9 @@
 - `key_topics.length >= 2`
 - `target_scene_count.min >= 2`
 - `target_duration_frames.min >= 300`
+- key topics 应覆盖技术原理 / 应用价值 / 风险或限制 / CTA（按主题裁剪）
+- contract 应鼓励足够的视觉变化，避免连续大量同类场景
+- contract 中涉及数据展示时，后续 script 必须能回溯到 research sources
 
 将结果写入：
 
